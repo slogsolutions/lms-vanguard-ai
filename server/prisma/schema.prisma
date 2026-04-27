@@ -1,0 +1,115 @@
+// This is your Prisma schema file for Prisma 7 updated for Auth
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── User ───────────────────────────────────────────────────
+model User {
+  id        String   @id @default(uuid())
+  serviceId String?  @unique @map("service_id") // e.g. BEG001
+  name      String
+  email     String   @unique
+  password  String
+  rank      String?  // e.g. Sepoy, Havildar
+  batch     String?  // e.g. 2026-A
+  unit      String?  // e.g. BEG Centre
+  role      String   @default("soldier")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  contents  Content[]
+  chats     Chat[]
+  progress  UserProgress[]
+
+  @@map("users")
+}
+
+// ── Content (Activities) ──────────────────────────────────
+model Content {
+  id             String   @id @default(uuid())
+  title          String
+  body           String
+  objective      String?
+  contentItems   String?
+  activity       String?
+  activityAnswer String?
+  
+  // New Defense Fields
+  type           String   @default("Offline") // Offline, Online, Both
+  duration       String?  // e.g. 45 min
+  difficulty     String?  // e.g. Beginner
+  category       String?  // e.g. Prompt Design
+  maxScore       Int      @default(100) @map("max_score")
+  
+  createdAt      DateTime @default(now()) @map("created_at")
+  createdBy      String?  @map("created_by")
+  author         User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  progress       UserProgress[]
+
+  @@map("content")
+}
+
+// ── Chat ───────────────────────────────────────────────────
+model Chat {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  messages  Message[]
+
+  @@map("chats")
+}
+
+// ── Message ────────────────────────────────────────────────
+model Message {
+  id        String      @id @default(uuid())
+  role      String
+  content   String
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  chatId    String      @map("chat_id")
+  chat      Chat        @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+// ── User Progress ──────────────────────────────────────────
+model UserProgress {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  contentId String   @map("content_id")
+  
+  // New Defense Fields
+  completed Boolean  @default(false)
+  score     Int      @default(0)
+  status    String   @default("pending") // pending, inprogress, completed
+  modelUsed String?  @map("model_used") // e.g. Llama 3.1
+  
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contentId])
+  @@map("user_progress")
+}
+
+// ── AI Model ───────────────────────────────────────────────
+model AIModel {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  type      String   // offline, online
+  provider  String   // Ollama, Google, etc.
+  status    String   @default("online") // online, offline
+  desc      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("ai_models")
+}
