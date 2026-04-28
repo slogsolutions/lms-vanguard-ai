@@ -6,31 +6,66 @@ const AdminPortal: React.FC = () => {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    password: '',
+    serviceId: '',
+    rank: '',
+    batch: '',
+    unit: '',
+    role: 'soldier'
+  });
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const fetchUsers = async () => {
+    try {
+      const res = await api.get('/auth/users');
+      if (res.data.success) {
+        setCandidates(res.data.data);
+      }
+    } catch (err) {
+      console.error('Fetch users error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        // In a real app, this would be a real endpoint. 
-        // For now, using the seeded users or mock if not available.
-        const res = await api.get('/auth/users'); // Need to ensure this exists or use mock
-        if (res.data.success) {
-          setCandidates(res.data.data);
-        } else {
-            // Mock if endpoint fails
-            setCandidates([
-                { id: "BEG001", serviceId: "BEG001", name: "Sep Arjun Kumar", rank: "Sepoy", batch: "2026-A", unit: "BEG Centre", progress: 75, score: 82, completed: 9, status: "active" },
-                { id: "BEG002", serviceId: "BEG002", name: "Hav Rajesh Singh", rank: "Havildar", batch: "2026-A", unit: "BEG Centre", progress: 100, score: 91, completed: 12, status: "active" },
-                { id: "BEG003", serviceId: "BEG003", name: "Rfn Suresh Yadav", rank: "Rifleman", batch: "2026-A", unit: "10 Inf Div", progress: 50, score: 74, completed: 6, status: "active" },
-            ]);
-        }
-      } catch (err) {
-        console.error('Fetch users error:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchUsers();
   }, []);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handleAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    try {
+      const res = await api.post('/auth/signup', formData);
+      if (res.data.success) {
+        setSuccess('User registered successfully!');
+        setFormData({
+          name: '',
+          email: '',
+          password: '',
+          serviceId: '',
+          rank: '',
+          batch: '',
+          unit: '',
+          role: 'soldier'
+        });
+        setShowAddForm(false);
+        fetchUsers();
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to add user');
+    }
+  };
 
   const filtered = candidates.filter(c => {
     const s = search.toLowerCase();
@@ -39,11 +74,20 @@ const AdminPortal: React.FC = () => {
     return match && f;
   });
 
+  if (loading) return <div className="text-center py-20">Loading Candidates...</div>;
+
   return (
     <div className="section-card">
       <div className="card-header">
         <div className="card-title">🎖️ Candidate Registry — {candidates.length} Enrolled</div>
         <div style={{ display: "flex", gap: 8 }}>
+          <button 
+            className="topbar-btn" 
+            style={{ backgroundColor: "var(--navy2)", color: "white", border: "none" }}
+            onClick={() => setShowAddForm(!showAddForm)}
+          >
+            {showAddForm ? 'Close Form' : '➕ Add Candidate'}
+          </button>
           <input className="form-input" placeholder="🔍 Search by name or ID…" style={{ width: 200 }} value={search} onChange={e => setSearch(e.target.value)} />
           <select className="form-select" style={{ width: 140 }} value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="all">All Status</option>
@@ -54,6 +98,29 @@ const AdminPortal: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {showAddForm && (
+        <div style={{ padding: '20px', borderBottom: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.05)' }}>
+          <form onSubmit={handleAddUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' }}>
+            <input className="form-input" name="name" placeholder="Full Name" required value={formData.name} onChange={handleInputChange} />
+            <input className="form-input" name="email" type="email" placeholder="Email" required value={formData.email} onChange={handleInputChange} />
+            <input className="form-input" name="password" type="password" placeholder="Password" required value={formData.password} onChange={handleInputChange} />
+            <input className="form-input" name="serviceId" placeholder="Service ID (e.g. BEG001)" value={formData.serviceId} onChange={handleInputChange} />
+            <input className="form-input" name="rank" placeholder="Rank (e.g. Sepoy)" value={formData.rank} onChange={handleInputChange} />
+            <input className="form-input" name="batch" placeholder="Batch (e.g. 2026-A)" value={formData.batch} onChange={handleInputChange} />
+            <input className="form-input" name="unit" placeholder="Unit" value={formData.unit} onChange={handleInputChange} />
+            <select className="form-select" name="role" value={formData.role} onChange={handleInputChange}>
+              <option value="soldier">Soldier</option>
+              <option value="admin">Admin</option>
+            </select>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="submit" className="topbar-btn" style={{ background: 'var(--green)', color: 'white', border: 'none' }}>Register Candidate</button>
+            </div>
+            {error && <div style={{ color: 'var(--red)', gridColumn: '1 / -1', fontSize: '12px' }}>{error}</div>}
+            {success && <div style={{ color: 'var(--green)', gridColumn: '1 / -1', fontSize: '12px' }}>{success}</div>}
+          </form>
+        </div>
+      )}
       <div style={{ overflowX: 'auto' }}>
         <table className="tbl">
           <thead>
@@ -69,7 +136,7 @@ const AdminPortal: React.FC = () => {
               <td><span className="chip">{c.batch || '2026-A'}</span></td>
               <td style={{ fontSize: 12, color: "var(--steel)" }}>{c.unit || 'BEG Centre'}</td>
               <td style={{ minWidth: 140 }}>
-                <div style={{ fontSize: 11, color: "var(--steel)", marginBottom: 3 }}>{c.completed || 0}/12 tasks</div>
+                <div style={{ fontSize: 11, color: "var(--steel)", marginBottom: 3 }}>{c.completed || 0}/{c.totalTasks || 0} tasks</div>
                 <div className="progress-bar"><div className="progress-fill" style={{ width: (c.progress || 0) + "%" }} /></div>
               </td>
               <td>

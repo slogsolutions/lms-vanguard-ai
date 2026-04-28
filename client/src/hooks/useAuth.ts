@@ -3,10 +3,15 @@ import { useDispatch } from "react-redux";
 import { setUser, setLoading, logout } from "../store/slices/authSlice.js";
 import { getProfile } from "../services/authService.js";
 
-export const useAuth = () => {
+export const useAuth = (enabled = true) => {
     const dispatch = useDispatch();
 
     useEffect(() => {
+        if (!enabled) {
+            dispatch(setLoading(false));
+            return;
+        }
+
         const checkAuth = async () => {
             dispatch(setLoading(true));
             try {
@@ -24,5 +29,5 @@ export const useAuth = () => {
         };
 
         checkAuth();
-    }, [dispatch]);
+    }, [dispatch, enabled]);
 };

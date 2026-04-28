@@ -43,8 +43,7 @@ const SoldierPortal: React.FC = () => {
       <div className="activity-grid">
         {filtered.map((a, i) => {
           const statusClass = a.status === "completed" ? "completed" : a.status === "inprogress" ? "inprog" : "";
-          const statusLabel = a.status === "completed" ? "Completed" : a.status === "inprogress" ? "In Progress" : "Not Started";
-          
+
           return (
             <div key={a.id} className={`activity-card ${statusClass}`}>
               <div className="act-title">{a.title}</div>

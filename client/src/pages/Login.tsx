@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { setUser, setLoading, setError } from '../store/slices/authSlice.js';
+import { clearError, setUser, setLoading, setError } from '../store/slices/authSlice.js';
 import { loginUser } from '../services/authService.js';
 import type { RootState } from '../store/store.js';
 
@@ -20,6 +20,7 @@ const Login: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    dispatch(clearError());
     dispatch(setLoading(true));
     try {
       const response = await loginUser({ email, password });

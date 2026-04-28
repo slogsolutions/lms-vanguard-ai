@@ -24,11 +24,7 @@ const Dashboard: React.FC = () => {
         if (modelRes.data.success) setModels(modelRes.data.data);
         // Candidates only for admin
         if (user?.role === 'admin') {
-            // Mocking candidate list for now if endpoint doesn't exist
-            setCandidates([
-                { id: "BEG001", name: "Sep Arjun Kumar", rank: "Sepoy", batch: "2026-A", progress: 75, completed: 9, score: 82, status: "active" },
-                { id: "BEG002", name: "Hav Rajesh Singh", rank: "Havildar", batch: "2026-A", progress: 100, completed: 12, score: 91, status: "active" },
-            ]);
+            if (userRes.data.success) setCandidates(userRes.data.data);
         }
       } catch (err) {
         console.error("Error fetching dashboard data", err);
@@ -39,7 +35,7 @@ const Dashboard: React.FC = () => {
     fetchData();
   }, [user]);
 
-  const avgScore = activities.length ? 67 : 0; // Mocked for now
+  if (loading) return <div className="text-center py-20">Loading Dashboard...</div>;
 
   return (
     <>

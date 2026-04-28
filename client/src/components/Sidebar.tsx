@@ -1,10 +1,22 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '../store/store.js';
+import { logout as logoutAction } from '../store/slices/authSlice.js';
+import api from '../api/axios.js';
 
 const Sidebar: React.FC = () => {
   const { user } = useSelector((state: RootState) => state.auth);
+  const dispatch = useDispatch();
+
+  const handleLogout = async () => {
+    try {
+      await api.post('/auth/logout');
+      dispatch(logoutAction());
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
 
   const NAV = [
     { section: "Main" },
@@ -48,10 +60,20 @@ const Sidebar: React.FC = () => {
         })}
       </nav>
       <div className="sidebar-footer">
-        <div className="user-avatar">{user?.name?.split(" ").map(w => w[0]).join("").slice(0, 2) || "U"}</div>
-        <div className="user-info">
-          <div className="name">{user?.name || "User"}</div>
-          <div className="role">{user?.rank || "Cadet"} • {user?.role}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+          <div className="user-avatar">{user?.name?.split(" ").map(w => w[0]).join("").slice(0, 2) || "U"}</div>
+          <div className="user-info" style={{ flex: 1 }}>
+            <div className="name">{user?.name || "User"}</div>
+            <div className="role">{user?.rank || "Cadet"} • {user?.role}</div>
+          </div>
+          <button 
+            onClick={handleLogout}
+            className="topbar-btn" 
+            style={{ padding: '6px', borderRadius: '8px', minWidth: 'auto' }}
+            title="Logout"
+          >
+            🚪
+          </button>
         </div>
       </div>
     </aside>

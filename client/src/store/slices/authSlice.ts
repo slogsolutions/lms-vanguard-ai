@@ -6,6 +6,10 @@ interface User {
     name: string;
     email: string;
     role: "admin" | "soldier";
+    serviceId?: string;
+    rank?: string;
+    batch?: string;
+    unit?: string;
 }
 
 interface AuthState {
@@ -29,6 +33,9 @@ const authSlice = createSlice({
         setLoading: (state, action: PayloadAction<boolean>) => {
             state.loading = action.payload;
         },
+        clearError: (state) => {
+            state.error = null;
+        },
         setUser: (state, action: PayloadAction<User>) => {
             state.user = action.payload;
             state.isAuthenticated = true;
@@ -48,5 +55,5 @@ const authSlice = createSlice({
     }
 });
 
-export const { setLoading, setUser, setError, logout } = authSlice.actions;
+export const { setLoading, setUser, setError, clearError, logout } = authSlice.actions;
 export default authSlice.reducer;

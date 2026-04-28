@@ -4,6 +4,211 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const normalizeModelName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const resolveOllamaModel = async (ollamaUrl: string, requestedModel: string) => {
+    const envModel = process.env.MODEL?.trim();
+    if (envModel) return envModel;
+
+    const fallbackModel = "llama3.2:1b";
+
+    try {
+        const response = await fetch(`${ollamaUrl}/api/tags`);
+        if (!response.ok) return fallbackModel;
+
+        const data: any = await response.json();
+        const installedModels = Array.isArray(data.models)
+            ? data.models.map((model: any) => model.name || model.model).filter(Boolean)
+            : [];
+
+        if (installedModels.length === 0) return fallbackModel;
+
+        const normalizedRequest = normalizeModelName(requestedModel);
+        const exactMatch = installedModels.find((model: string) => normalizeModelName(model) === normalizedRequest);
+        if (exactMatch) return exactMatch;
+
+        const familyMatch = installedModels.find((model: string) => {
+            const normalizedInstalled = normalizeModelName(model);
+            return normalizedRequest.includes("llama") && normalizedInstalled.includes("llama")
+                || normalizedRequest.includes("mistral") && normalizedInstalled.includes("mistral")
+                || normalizedRequest.includes("gemma") && normalizedInstalled.includes("gemma")
+                || normalizedRequest.includes("phi") && normalizedInstalled.includes("phi");
+        });
+
+        return familyMatch || installedModels[0];
+    } catch {
+        return fallbackModel;
+    }
+};
+
+type ActivityContext = {
+    title: string;
+    body: string;
+    category?: string | null;
+    type?: string | null;
+};
+
+type ToolResult = {
+    handled: boolean;
+    reply?: string;
+};
+
+type ToolMode = "offline" | "online";
+
+const getTaskKey = (activity?: ActivityContext | null) => {
+    const text = `${activity?.title || ""} ${activity?.category || ""} ${activity?.body || ""}`.toLowerCase();
+    if (text.includes("video")) return "video";
+    if (text.includes("voice")) return "voice";
+    if (text.includes("summarize") || text.includes("summary") || text.includes("excel") || text.includes("word") || text.includes("pdf")) return "summary";
+    if (text.includes("quiz") || text.includes("assessment")) return "quiz";
+    if (text.includes("translation") || text.includes("translate")) return "translation";
+    if (text.includes("convert") || text.includes("conversion")) return "conversion";
+    if (text.includes("formal") || text.includes("communication")) return "communication";
+    if (text.includes("prompt")) return "prompting";
+    return "general";
+};
+
+const taskToolEnv: Record<string, Record<ToolMode, string>> = {
+    prompting: { offline: "OLLAMA_URL", online: "ONLINE_PROMPT_TOOL_URL" },
+    video: { offline: "OFFLINE_VIDEO_TOOL_URL", online: "ONLINE_VIDEO_TOOL_URL" },
+    voice: { offline: "OFFLINE_VOICE_TOOL_URL", online: "ONLINE_VOICE_TOOL_URL" },
+    summary: { offline: "OFFLINE_SUMMARY_TOOL_URL", online: "ONLINE_SUMMARY_TOOL_URL" },
+    quiz: { offline: "OFFLINE_QUIZ_TOOL_URL", online: "ONLINE_QUIZ_TOOL_URL" },
+    translation: { offline: "LIBRETRANSLATE_URL", online: "ONLINE_TRANSLATION_TOOL_URL" },
+    conversion: { offline: "OFFLINE_CONVERSION_TOOL_URL", online: "ONLINE_CONVERSION_TOOL_URL" },
+    communication: { offline: "OFFLINE_COMMUNICATION_TOOL_URL", online: "ONLINE_COMMUNICATION_TOOL_URL" },
+    general: { offline: "OLLAMA_URL", online: "ONLINE_GENERAL_TOOL_URL" },
+};
+
+const getToolMode = (modelType?: string): ToolMode => modelType === "online" ? "online" : "offline";
+
+const extractToolReply = (data: any) => {
+    if (typeof data === "string") return data;
+    return data?.reply
+        || data?.text
+        || data?.output
+        || data?.result
+        || data?.message?.content
+        || data?.choices?.[0]?.message?.content
+        || JSON.stringify(data, null, 2);
+};
+
+const callHttpAiTool = async (toolUrl: string, payload: object) => {
+    const response = await fetch(toolUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    const responseText = await response.text();
+    if (!response.ok) {
+        throw new Error(`AI tool error ${response.status}: ${responseText}`);
+    }
+
+    try {
+        return extractToolReply(JSON.parse(responseText));
+    } catch {
+        return responseText;
+    }
+};
+
+const callLibreTranslateTool = async (toolUrl: string, message: string) => {
+    const response = await fetch(`${toolUrl.replace(/\/$/, "")}/translate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            q: message,
+            source: "auto",
+            target: process.env.TRANSLATE_TARGET || "hi",
+            format: "text",
+        }),
+    });
+
+    const data: any = await response.json();
+    if (!response.ok) {
+        throw new Error(`LibreTranslate error ${response.status}: ${JSON.stringify(data)}`);
+    }
+
+    return data.translatedText || JSON.stringify(data, null, 2);
+};
+
+const callOllamaTool = async (ollamaUrl: string, modelName: string, messages: Array<{ role: string; content: string }>) => {
+    const ollamaModel = await resolveOllamaModel(ollamaUrl, modelName);
+    const response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            model: ollamaModel,
+            messages,
+            stream: false,
+            options: { temperature: 0.6 }
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Ollama Error: ${response.status} ${errorText}`);
+    }
+
+    const data: any = await response.json();
+    return data.message?.content || JSON.stringify(data, null, 2);
+};
+
+const getMissingToolMessage = (taskKey: string, toolMode: ToolMode, envName: string) => {
+    return `**AI Tool Not Configured**\n\nThis task is set to run through a real ${toolMode} AI tool, but the connector is missing.\n\nAdd this to \`server/.env\`:\n\n\`\`\`env\n${envName}=http://localhost:YOUR_TOOL_PORT\n\`\`\`\n\nTask: \`${taskKey}\`\nMode: \`${toolMode}\`\n\nNo local fallback was used.`;
+};
+
+const runIntegratedAiTool = async ({
+    taskKey,
+    toolMode,
+    message,
+    activity,
+    modelName,
+    messagesForAI,
+    ollamaUrl,
+}: {
+    taskKey: string;
+    toolMode: ToolMode;
+    message: string;
+    activity: ActivityContext | null;
+    modelName: string;
+    messagesForAI: Array<{ role: string; content: string }>;
+    ollamaUrl: string;
+}): Promise<ToolResult> => {
+    const envName = taskToolEnv[taskKey]?.[toolMode] || taskToolEnv.general[toolMode];
+    const toolUrl = process.env[envName]?.trim();
+
+    if (toolMode === "offline" && (taskKey === "prompting" || taskKey === "general")) {
+        return {
+            handled: true,
+            reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
+        };
+    }
+
+    if (!toolUrl) {
+        return {
+            handled: true,
+            reply: getMissingToolMessage(taskKey, toolMode, envName),
+        };
+    }
+
+    if (taskKey === "translation" && envName === "LIBRETRANSLATE_URL") {
+        return {
+            handled: true,
+            reply: await callLibreTranslateTool(toolUrl, message),
+        };
+    }
+
+    const reply = await callHttpAiTool(toolUrl, {
+        input: message,
+        task: taskKey,
+        mode: toolMode,
+        activity,
+    });
+
+    return { handled: true, reply };
+};
+
 export const askAI = async (req: any, res: Response): Promise<void> => {
     try {
         const { message, chatId, modelId, activityId } = req.body;
@@ -12,9 +217,13 @@ export const askAI = async (req: any, res: Response): Promise<void> => {
 
         // 1. Get Model info
         let modelName = "phi"; // Default fallback
+        let modelType = "offline";
         if (modelId) {
             const modelObj = await prisma.aIModel.findUnique({ where: { id: modelId } });
-            if (modelObj) modelName = modelObj.name;
+            if (modelObj) {
+                modelName = modelObj.name;
+                modelType = modelObj.type;
+            }
         }
 
         // 2. Determine or create chat session
@@ -45,10 +254,21 @@ export const askAI = async (req: any, res: Response): Promise<void> => {
 
         // 5. Get Context (Specific activity if provided, or general)
         let contextText = "";
+        let currentActivity: ActivityContext | null = null;
         if (activityId) {
             const activity = await prisma.content.findUnique({ where: { id: activityId } });
             if (activity) {
-                contextText = `CURRENT TASK: ${activity.title}\nDESCRIPTION: ${activity.body}\nINSTRUCTIONS: Guide the student through this task. Do not give the answer immediately, but help them learn.`;
+                currentActivity = activity;
+                contextText = `CURRENT TASK: ${activity.title}
+CATEGORY: ${activity.category || "General"}
+MODE: ${activity.type}
+DESCRIPTION: ${activity.body}
+STRICT TASK RULES:
+- Keep every response focused on this task only.
+- If the learner asks something unrelated, briefly redirect them back to the current task.
+- Produce outputs in the format expected by this task.
+- Give practical steps, examples, and a final usable deliverable.
+- Do not mark the task complete unless the learner has produced or reviewed the deliverable.`;
             }
         } else {
             const contents = await prisma.content.findMany({ take: 5 });
@@ -63,6 +283,7 @@ MISSION OBJECTIVE:
 2. Use military analogies where appropriate (e.g., comparing Prompt Engineering to 'Fire Control' or 'Mission Briefing').
 3. Be concise and structured. Use bullet points.
 4. Maintain high operational security (OPSEC) - remind users not to share classified info with online models.
+5. When a current task is supplied, act as a task-specific workspace, not a generic chatbot.
 
 ${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
 
@@ -72,29 +293,26 @@ ${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
         ];
 
         let assistantReply = "";
+        const taskKey = getTaskKey(currentActivity);
+        const toolMode = getToolMode(modelType);
 
-        // Check if we should use local Ollama
         try {
-            const response = await fetch(`${ollamaUrl}/api/chat`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    model: modelName.toLowerCase().replace(/ /g, "-").replace(/\.[0-9]/g, ""), // Simple normalization for Ollama
-                    messages: messagesForAI,
-                    stream: false,
-                    options: { temperature: 0.6 }
-                })
+            const taskToolResult = await runIntegratedAiTool({
+                taskKey,
+                toolMode,
+                message,
+                activity: currentActivity,
+                modelName,
+                messagesForAI,
+                ollamaUrl,
             });
 
-            if (response.ok) {
-                const data: any = await response.json();
-                assistantReply = data.message.content;
-            } else {
-                throw new Error("Ollama Error");
+            if (taskToolResult.handled && taskToolResult.reply) {
+                assistantReply = taskToolResult.reply;
             }
         } catch (err) {
-            // Fallback for demo/interactive if Ollama is not running
-            assistantReply = `[SIMULATED - OLLAMA OFFLINE]\n\nAs your Defence AI Lab Instructor, I have processed your input regarding "${message.substring(0, 30)}...". \n\nNormally, I would use the ${modelName} model to respond, but the local AI server is currently unreachable. \n\n**Key Guidance:**\n- Ensure you follow the prompt engineering principles discussed in TASK-01.\n- Keep your queries structured and clear.\n- Verify the AI response before implementation.\n\nHow else can I assist you with your current mission?`;
+            console.error("AI tool failed:", err);
+            assistantReply = `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nNo local fallback was used.`;
         }
 
         // 6. Save AI response

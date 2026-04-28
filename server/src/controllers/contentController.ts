@@ -6,7 +6,7 @@ export const getAllContent = async (req: any, res: Response): Promise<void> => {
         const userId = req.user?.id || "";
 
         const contents = await prisma.content.findMany({
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: 'asc' },
             include: {
                 progress: {
                     where: { userId }

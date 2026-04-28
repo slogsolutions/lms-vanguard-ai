@@ -13,7 +13,17 @@ export const protectRoute = async (req: any, res: Response, next: NextFunction) 
         const decoded: any = jwt.verify(token, process.env.JWT_SECRET || "default_secret");
         const user = await prisma.user.findUnique({
             where: { id: decoded.userId },
-            select: { id: true, name: true, email: true, role: true }
+            select: {
+                id: true,
+                serviceId: true,
+                name: true,
+                email: true,
+                rank: true,
+                batch: true,
+                unit: true,
+                role: true,
+                createdAt: true,
+            }
         });
 
         if (!user) {

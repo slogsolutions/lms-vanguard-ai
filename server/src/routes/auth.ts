@@ -4,7 +4,7 @@ import { protectRoute, adminOnly } from "../middleware/authMiddleware.js";
 
 const router = Router();
 
-router.post("/signup", signUp);
+router.post("/signup", protectRoute, adminOnly, signUp);
 router.post("/login", login);
 router.post("/logout", logout);
 router.get("/users", protectRoute, adminOnly, getAllUsers);

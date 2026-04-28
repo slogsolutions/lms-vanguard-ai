@@ -41,15 +41,7 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
       }
     });
 
-    const token = generateUserJWT(user.id);
-    res.cookie("token", token, {
-        httpOnly: true,
-        secure: false, // In prod: true
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    res.status(201).json({ success: true, message: "User registered", data: user });
+    res.status(201).json({ success: true, message: "User registered successfully", data: user });
   } catch (error: any) {
     console.error("Error in signUp:", error);
     res.status(400).json({ success: false, error: error.message });
@@ -122,6 +114,7 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
 
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
+    const totalTasks = await prisma.content.count();
     const users = await prisma.user.findMany({
       select: {
         id: true,
@@ -152,7 +145,8 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
         ...u,
         completed: completedCount,
         score: avgScore,
-        progress: u.progress.length > 0 ? Math.round((completedCount / u.progress.length) * 100) : 0
+        totalTasks,
+        progress: totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0
       };
     });
 

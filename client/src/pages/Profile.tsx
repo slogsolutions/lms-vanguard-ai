@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { MdPerson, MdEmail, MdAdminPanelSettings, MdChat, MdMenuBook, MdEvent, MdShield } from 'react-icons/md';
+import { MdEmail, MdAdminPanelSettings, MdChat, MdMenuBook, MdEvent, MdShield } from 'react-icons/md';
 import api from '../api/axios.js';
 
 interface ProfileData {
