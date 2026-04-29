@@ -129,8 +129,16 @@ On PowerShell, run commands with `;` between them if chaining.
 From `server/`:
 
 ```bash
-npx prisma generate
-npx prisma db push
+npm run db:setup
+```
+
+This creates/updates the SQLite database and seeds the default users, AI models, and Activity List content. The activity cards come from the Prisma `Content` model stored in `server/prisma/dev.db`; the database file is intentionally ignored by Git, so every fresh clone must run the setup/seed step.
+
+Default seeded login:
+
+```text
+Email: priya@army.mil
+Password: defense123
 ```
 
 Optional:
@@ -307,4 +315,3 @@ If frontend runs on another port, update CORS config in `server/src/index.ts`.
 ## 15) License
 
 No license declared yet. Add a `LICENSE` file if this project is intended for distribution.
-
