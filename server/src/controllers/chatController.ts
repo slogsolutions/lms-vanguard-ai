@@ -6,6 +6,19 @@ dotenv.config();
 
 const normalizeModelName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+const withTrailingSlashTrimmed = (url: string) => url.replace(/\/+$/, "");
+
+const fetchWithTimeout = async (input: string, init: RequestInit & { timeoutMs?: number } = {}) => {
+    const { timeoutMs = 60_000, ...rest } = init;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(input, { ...rest, signal: controller.signal });
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+
 const resolveOllamaModel = async (ollamaUrl: string, requestedModel: string) => {
     const envModel = process.env.MODEL?.trim();
     if (envModel) return envModel;
@@ -13,7 +26,8 @@ const resolveOllamaModel = async (ollamaUrl: string, requestedModel: string) => 
     const fallbackModel = "llama3.2:1b";
 
     try {
-        const response = await fetch(`${ollamaUrl}/api/tags`);
+        const base = withTrailingSlashTrimmed(ollamaUrl);
+        const response = await fetchWithTimeout(`${base}/api/tags`, { timeoutMs: 10_000 });
         if (!response.ok) return fallbackModel;
 
         const data: any = await response.json();
@@ -93,6 +107,11 @@ const extractToolReply = (data: any) => {
         || JSON.stringify(data, null, 2);
 };
 
+const formatToolConfigHint = (toolMode: ToolMode, taskKey: string, toolUrl?: string) => {
+    const snippet = toolUrl ? `Tool URL: \`${toolUrl}\`\n\n` : "";
+    return `${snippet}Task: \`${taskKey}\`\nMode: \`${toolMode}\``;
+};
+
 const callHttpAiTool = async (toolUrl: string, payload: object) => {
     const response = await fetch(toolUrl, {
         method: "POST",
@@ -133,8 +152,9 @@ const callLibreTranslateTool = async (toolUrl: string, message: string) => {
 };
 
 const callOllamaTool = async (ollamaUrl: string, modelName: string, messages: Array<{ role: string; content: string }>) => {
-    const ollamaModel = await resolveOllamaModel(ollamaUrl, modelName);
-    const response = await fetch(`${ollamaUrl}/api/chat`, {
+    const base = withTrailingSlashTrimmed(ollamaUrl);
+    const ollamaModel = await resolveOllamaModel(base, modelName);
+    const response = await fetchWithTimeout(`${base}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -142,7 +162,8 @@ const callOllamaTool = async (ollamaUrl: string, modelName: string, messages: Ar
             messages,
             stream: false,
             options: { temperature: 0.6 }
-        })
+        }),
+        timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 120_000),
     });
 
     if (!response.ok) {
@@ -199,14 +220,38 @@ const runIntegratedAiTool = async ({
         };
     }
 
-    const reply = await callHttpAiTool(toolUrl, {
-        input: message,
-        task: taskKey,
-        mode: toolMode,
-        activity,
-    });
+    try {
+        const reply = await callHttpAiTool(toolUrl, {
+            input: message,
+            task: taskKey,
+            mode: toolMode,
+            activity,
+        });
 
-    return { handled: true, reply };
+        return { handled: true, reply };
+    } catch (err) {
+        // If an online tool is misconfigured (common: 405), fall back to local Ollama for prompt/general tasks.
+        const canFallbackToOllama = (taskKey === "prompting" || taskKey === "general") && (ollamaUrl?.trim()?.length ?? 0) > 0;
+        if (toolMode === "online" && canFallbackToOllama) {
+            try {
+                const localReply = await callOllamaTool(ollamaUrl, modelName, messagesForAI);
+                return {
+                    handled: true,
+                    reply: `**Online tool unavailable — switched to offline model**\n\n${formatToolConfigHint(toolMode, taskKey, toolUrl)}\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\n---\n\n${localReply}`,
+                };
+            } catch (fallbackErr) {
+                return {
+                    handled: true,
+                    reply: `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed, and the offline fallback also failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nOffline fallback error: ${fallbackErr instanceof Error ? fallbackErr.message : "Unknown fallback error"}\n\n${formatToolConfigHint(toolMode, taskKey, toolUrl)}`,
+                };
+            }
+        }
+
+        return {
+            handled: true,
+            reply: `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\n${formatToolConfigHint(toolMode, taskKey, toolUrl)}`,
+        };
+    }
 };
 
 export const askAI = async (req: any, res: Response): Promise<void> => {
@@ -313,6 +358,10 @@ ${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
         } catch (err) {
             console.error("AI tool failed:", err);
             assistantReply = `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nNo local fallback was used.`;
+        }
+
+        if (!assistantReply.trim()) {
+            assistantReply = "AI did not return a response. Check that your offline model service (Ollama) is running and the selected model is installed.";
         }
 
         // 6. Save AI response
