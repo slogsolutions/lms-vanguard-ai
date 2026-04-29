@@ -5,8 +5,15 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "db:setup": "prisma generate && prisma db push && prisma db seed",
     "start": "node dist/index.ts",
     "dev": "tsx watch src/index.ts"
+  },
+  "prisma": {
+    "seed": "tsx src/utils/seed_defense.ts"
   },
   "keywords": [],
   "author": "",

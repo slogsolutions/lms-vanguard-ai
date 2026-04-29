@@ -54,16 +54,40 @@ const defaultMode: TaskMode = {
   modelKeywords: [],
 };
 
+const translationTargets = [
+  { code: 'hi', label: 'Hindi' },
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'ar', label: 'Arabic' },
+];
+
+const readableFileTypes = [
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'application/xml',
+  'text/html',
+];
+
+const isReadableFile = (file: File) => {
+  const name = file.name.toLowerCase();
+  return readableFileTypes.includes(file.type)
+    || ['.txt', '.md', '.csv', '.json', '.xml', '.html', '.log'].some(ext => name.endsWith(ext));
+};
+
 const taskModes: Array<{ match: string[]; mode: TaskMode }> = [
   {
     match: ['basic prompting', 'prompt design'],
     mode: {
       key: 'prompting', accent: '#B86B24', glow: 'rgba(184,107,36,0.20)', icon: 'P1', label: 'Prompt Builder',
-      modelHint: 'Best with reasoning/chat models that can critique and refine prompts.',
-      placeholder: 'Write your rough prompt here. I will improve clarity, role, context, and expected output...',
-      starter: 'Prompting mode active. We will build a clear prompt, test it, then refine it until the instruction is precise.',
-      quickPrompts: ['Make my prompt clearer', 'Add role and context', 'Create 3 prompt versions'],
-      deliverables: ['Clear role/context', 'Specific instruction', 'Expected output format', 'Improved final prompt'],
+      modelHint: 'Uses local Ollama for prompt generation, rewriting, and normal chat.',
+      placeholder: 'Ask anything, or paste a rough prompt to improve it...',
+      starter: 'Prompting mode active. Use this as a normal Ollama chat workspace for prompt writing, prompt improvement, examples, and direct answers.',
+      quickPrompts: ['Create a prompt template', 'Improve my pasted prompt', 'Explain prompt structure'],
+      deliverables: ['Direct answer', 'Ready-to-use prompt', 'Clear role/context', 'Output format'],
       modelKeywords: ['llama', 'mistral', 'gpt', 'claude'],
     },
   },
@@ -119,11 +143,11 @@ const taskModes: Array<{ match: string[]; mode: TaskMode }> = [
     match: ['translation', 'translate'],
     mode: {
       key: 'translation', accent: '#22749B', glow: 'rgba(34,116,155,0.20)', icon: 'TR', label: 'Translation Desk',
-      modelHint: 'Best with multilingual models. Use offline models for sensitive text.',
-      placeholder: 'Enter the text and target languages...',
-      starter: 'Translation mode active. I will translate accurately, preserve tone, and flag phrases that may need local review.',
-      quickPrompts: ['Translate to Hindi', 'Translate to 5 languages', 'Keep formal tone'],
-      deliverables: ['Source meaning preserved', 'Target translations', 'Tone check', 'Review notes'],
+      modelHint: 'Runs through local LibreTranslate for this task workspace.',
+      placeholder: 'Enter or upload text to translate with local LibreTranslate...',
+      starter: 'Translation mode active. This workspace will use local LibreTranslate for the selected target language.',
+      quickPrompts: ['Translate typed text', 'Translate uploaded file', 'Keep formal tone'],
+      deliverables: ['Source meaning preserved', 'Local translation output', 'Tone check', 'Review notes'],
       modelKeywords: ['gemini', 'gpt', 'claude', 'llama'],
     },
   },
@@ -181,6 +205,8 @@ const ChatInterface: React.FC = () => {
   const [inputVal, setInputVal] = useState('');
   const [loading, setLoading] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
+  const [translateTarget, setTranslateTarget] = useState('hi');
+  const [fileStatus, setFileStatus] = useState('');
   const msgEndRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const activityId = new URLSearchParams(location.search).get('activity');
@@ -197,7 +223,11 @@ const ChatInterface: React.FC = () => {
         const modelData: Model[] = modelRes.data.success ? modelRes.data.data : [];
         const activityData: Activity | null = activityRes?.data?.success ? activityRes.data.data : null;
         const activeMode = getTaskMode(activityData);
-        const bestModel = [...modelData].sort((a, b) => scoreModelForTask(b, activeMode, activityData) - scoreModelForTask(a, activeMode, activityData))[0] ?? null;
+        const candidateModels = activeMode.key === 'translation' || activeMode.key === 'prompting'
+          ? modelData.filter(model => model.type === 'offline')
+          : modelData;
+        const bestModel = [...(candidateModels.length ? candidateModels : modelData)]
+          .sort((a, b) => scoreModelForTask(b, activeMode, activityData) - scoreModelForTask(a, activeMode, activityData))[0] ?? null;
 
         setModels(modelData);
         setActivity(activityData);
@@ -233,6 +263,7 @@ const ChatInterface: React.FC = () => {
         modelId: selectedModel.id,
         chatId,
         activityId,
+        translateTarget: mode.key === 'translation' ? translateTarget : undefined,
       });
 
       if (res.data?.success) {
@@ -262,6 +293,32 @@ const ChatInterface: React.FC = () => {
   const switchModel = (m: Model) => {
     setSelectedModel(m);
     setMessages(prev => [...prev, { role: 'ai', text: `Switched to ${m.name}. ${m.type === 'offline' ? 'Offline mode active.' : 'Online mode active. Do not share sensitive or classified information.'}\n\nI will still stay focused on: ${activity?.title ?? 'the current workspace'}.` }]);
+  };
+
+  const handleFileUpload = async (file?: File | null) => {
+    if (!file || mode.key !== 'translation') return;
+    if (file.size > 1024 * 1024) {
+      setFileStatus('Use a text file under 1 MB for this demo workspace.');
+      return;
+    }
+    if (!isReadableFile(file)) {
+      setFileStatus('Upload a readable text file such as TXT, MD, CSV, JSON, XML, HTML, or LOG.');
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const cleaned = text.trim();
+      if (!cleaned) {
+        setFileStatus('The selected file has no readable text.');
+        return;
+      }
+
+      setInputVal(cleaned);
+      setFileStatus(`${file.name} loaded. Review the text, then run translation.`);
+    } catch {
+      setFileStatus('Could not read this file. Try saving it as plain text first.');
+    }
   };
 
   if (!selectedModel) return <div className="text-center py-20">Initializing AI Environment...</div>;
@@ -329,6 +386,33 @@ const ChatInterface: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {mode.key === 'translation' && (
+          <div className="translation-panel">
+            <div className="translation-control">
+              <label htmlFor="translate-target">Target Language</label>
+              <select
+                id="translate-target"
+                value={translateTarget}
+                onChange={e => setTranslateTarget(e.target.value)}
+              >
+                {translationTargets.map(target => (
+                  <option key={target.code} value={target.code}>{target.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="translation-control file-control">
+              <label htmlFor="translate-file">Upload Text File</label>
+              <input
+                id="translate-file"
+                type="file"
+                accept=".txt,.md,.csv,.json,.xml,.html,.log,text/plain,text/markdown,text/csv,application/json"
+                onChange={e => handleFileUpload(e.target.files?.[0])}
+              />
+              {fileStatus && <span className="file-status">{fileStatus}</span>}
+            </div>
+          </div>
+        )}
 
         <div className="ai-chat-hdr">
           <div>

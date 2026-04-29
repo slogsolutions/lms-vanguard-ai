@@ -131,19 +131,31 @@ const callHttpAiTool = async (toolUrl: string, payload: object) => {
     }
 };
 
-const callLibreTranslateTool = async (toolUrl: string, message: string) => {
-    const response = await fetch(`${toolUrl.replace(/\/$/, "")}/translate`, {
+const getLibreTranslateEndpoint = (toolUrl: string) => {
+    const normalizedUrl = toolUrl.replace(/\/+$/, "");
+    return normalizedUrl.endsWith("/translate") ? normalizedUrl : `${normalizedUrl}/translate`;
+};
+
+const callLibreTranslateTool = async (toolUrl: string, message: string, targetLanguage?: string) => {
+    const response = await fetch(getLibreTranslateEndpoint(toolUrl), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             q: message,
             source: "auto",
-            target: process.env.TRANSLATE_TARGET || "hi",
+            target: targetLanguage || process.env.TRANSLATE_TARGET || "hi",
             format: "text",
         }),
     });
 
-    const data: any = await response.json();
+    const responseText = await response.text();
+    let data: any;
+    try {
+        data = JSON.parse(responseText);
+    } catch {
+        throw new Error(`LibreTranslate returned non-JSON response. Check LIBRETRANSLATE_URL. Response starts with: ${responseText.slice(0, 80)}`);
+    }
+
     if (!response.ok) {
         throw new Error(`LibreTranslate error ${response.status}: ${JSON.stringify(data)}`);
     }
@@ -151,7 +163,12 @@ const callLibreTranslateTool = async (toolUrl: string, message: string) => {
     return data.translatedText || JSON.stringify(data, null, 2);
 };
 
-const callOllamaTool = async (ollamaUrl: string, modelName: string, messages: Array<{ role: string; content: string }>) => {
+const callOllamaTool = async (
+    ollamaUrl: string,
+    modelName: string,
+    messages: Array<{ role: string; content: string }>,
+    options: Record<string, unknown> = {},
+) => {
     const base = withTrailingSlashTrimmed(ollamaUrl);
     const ollamaModel = await resolveOllamaModel(base, modelName);
     const response = await fetchWithTimeout(`${base}/api/chat`, {
@@ -161,7 +178,14 @@ const callOllamaTool = async (ollamaUrl: string, modelName: string, messages: Ar
             model: ollamaModel,
             messages,
             stream: false,
-            options: { temperature: 0.6 }
+            options: {
+                temperature: 0.25,
+                top_p: 0.9,
+                repeat_penalty: 1.08,
+                num_predict: 420,
+                num_ctx: 2048,
+                ...options,
+            }
         }),
         timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 120_000),
     });
@@ -173,6 +197,179 @@ const callOllamaTool = async (ollamaUrl: string, modelName: string, messages: Ar
 
     const data: any = await response.json();
     return data.message?.content || JSON.stringify(data, null, 2);
+};
+
+const cleanPromptingReply = (reply: string) => {
+    return reply
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/^\s*\*\s+/gm, "- ")
+        .replace(/```(?:text|markdown)?\s*/g, "")
+        .replace(/```/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+};
+
+const buildPromptingMessages = (
+    message: string,
+    history: Array<{ role: string; content: string }>,
+    activity: ActivityContext | null,
+) => {
+    const recentHistory = history
+        .slice(-8)
+        .filter(m => m.content?.trim())
+        .map(m => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content,
+        }));
+
+    const lastHistoryMessage = recentHistory[recentHistory.length - 1];
+    const hasCurrentMessage = lastHistoryMessage?.role === "user" && lastHistoryMessage.content === message;
+
+    return [
+        {
+            role: "system",
+            content: `You are a precise Prompt Builder and chat assistant inside a training workspace.
+
+Primary job:
+- Answer the user's question directly.
+- Generate a prompt only when the user clearly asks for a prompt, asks to improve a prompt, or provides rough prompt text.
+- When given a rough prompt, improve it with role, context, task, constraints, output format, and examples if useful.
+- When chatting normally, be helpful and concise without forcing every answer into a lesson.
+
+Identity and conduct:
+- Your name is Defence AI Lab Assistant.
+- Never invent another assistant name, personal history, location, rank, or organization.
+- Keep every response professional, respectful, and suitable for a training platform.
+- Do not generate vulgar, sexually explicit, abusive, hateful, or insulting content.
+- If the user asks for vulgar or unsafe content, refuse briefly and offer a clean alternative.
+- If the user writes in Hindi/Hinglish, answer naturally in Hindi/Hinglish unless they ask for English.
+- If the message is a greeting or casual chat, reply like normal chat. Do not create a prompt.
+
+Response rules:
+- Start with the useful answer, not a long explanation.
+- Use clear headings only when they help.
+- Use plain text formatting. Do not use Markdown bold markers like **text**.
+- Prefer short sections with simple hyphen bullets.
+- Keep normal answers short: 2-6 lines unless the user asks for detail.
+- For explicit prompt generation requests, provide:
+  1. Final Prompt as a full copy-paste prompt, not a short title
+  2. Why it works
+  3. Optional variations, only if useful
+- The Final Prompt must include enough detail for another AI model to perform the task without extra explanation.
+- Ask a follow-up only when required information is missing.
+- Do not overuse military analogies.
+- Do not refuse normal prompt-writing, summarizing, rewriting, planning, coding, or chatting requests.
+- Before answering, decide the user's intent:
+  - greeting/chat: answer directly
+  - question: answer directly
+  - prompt request: create or improve a prompt
+  - unclear typo: answer the most likely meaning and ask a short clarification if needed
+
+Workspace task: ${activity?.title || "Basic Prompting"}
+Task description: ${activity?.body || "Practice prompt writing, prompt improvement, and AI chat."}`,
+        },
+        ...recentHistory,
+        ...(hasCurrentMessage ? [] : [{ role: "user", content: message }]),
+    ];
+};
+
+const getPromptingDirectReply = (message: string) => {
+    const text = message.trim().toLowerCase();
+    const normalized = text.replace(/[^a-z0-9\u0900-\u097f\s]/g, " ").replace(/\s+/g, " ").trim();
+
+    const unsafePattern = /\b(vulgar|abuse|abusive|sex|sexual|porn|nude|gaali|gali|गाली|अश्लील|गंदा|भद्दा)\b/i;
+    if (unsafePattern.test(normalized)) {
+        return "I cannot create vulgar, abusive, or explicit content. I can help make it formal, respectful, humorous in a clean way, or suitable for training use.";
+    }
+
+    const greetingPattern = /^(hi|hello|hey|namaste|namaskar|नमस्ते|नमस्कार|kaise ho|kaise ho aap|कैसे हो|आप कैसे हो|aap kaise ho)\b/i;
+    if (greetingPattern.test(normalized)) {
+        if (/kaise|कैसे/.test(normalized)) {
+            return "Main theek hoon, dhanyavaad. Aap batayein, main prompt banana, prompt improve karna, ya kisi topic par direct answer dene mein madad kar sakta hoon.";
+        }
+        return "Hello. I am ready to help with chat, prompt writing, prompt improvement, examples, and task preparation.";
+    }
+
+    const identityPattern = /\b(what is your name|whats your name|what's your name|your name|tumhara naam|aapka naam|आपका नाम|तुम्हारा नाम)\b/i;
+    if (identityPattern.test(normalized)) {
+        return "My name is Defence AI Lab Assistant. I can help with normal chat, prompt generation, prompt improvement, summaries, and training-related task support.";
+    }
+
+    const rolePattern = /\b(what is your role|whats your role|what's your role|your role|wahts are role|what are role|role kya hai|आपकी भूमिका|tumhara role|aapka role)\b/i;
+    if (rolePattern.test(normalized)) {
+        return "My role is to help you use this Basic Prompting workspace. I can answer questions, create prompts, improve rough prompts, explain prompt structure, and keep the output clear and professional.";
+    }
+
+    const promptCreatePattern = /\b(create|generate|write|make|draft|prepare)\s+(a\s+|an\s+)?(precise\s+|good\s+|best\s+)?prompt\b|\bprompt\s+for\b/i;
+    if (promptCreatePattern.test(normalized)) {
+        const taskText = message
+            .replace(/\b(create|generate|write|make|draft|prepare)\s+(a\s+|an\s+)?(precise\s+|good\s+|best\s+)?prompt\s*(for|to|about)?/i, "")
+            .trim()
+            || "[describe the task]";
+
+        return `Final Prompt
+You are an expert assistant.
+
+Task: ${taskText}
+
+Input material:
+[Paste the training notes, report, paragraph, or source content here.]
+
+Instructions:
+- Use only the information provided in the input material.
+- Do not invent facts, names, numbers, dates, examples, or scores.
+- If important information is missing, write "Not provided" or ask a short clarification question.
+- Keep the output clear, structured, and suitable for training use.
+
+Output format:
+1. Main output
+2. Key points
+3. Action items or next steps, if applicable
+4. Short review/checklist
+
+Why it works
+It gives the AI a role, a clear task, source material boundaries, anti-hallucination rules, and a fixed output format.`;
+    }
+
+    return null;
+};
+
+const getPromptingDirectReplyOld = (message: string) => {
+    const text = message.trim().toLowerCase();
+    const normalized = text.replace(/[^a-z0-9\u0900-\u097f\s]/g, " ").replace(/\s+/g, " ").trim();
+
+    const promptCreatePattern = /\b(create|generate|write|make|draft|prepare)\s+(a\s+|an\s+)?(precise\s+|good\s+|best\s+)?prompt\b|\bprompt\s+for\b/i;
+    if (promptCreatePattern.test(normalized)) {
+        const taskText = message
+            .replace(/\b(create|generate|write|make|draft|prepare)\s+(a\s+|an\s+)?(precise\s+|good\s+|best\s+)?prompt\s*(for|to|about)?/i, "")
+            .trim()
+            || "[describe the task]";
+
+        return `Final Prompt
+You are an expert assistant.
+
+Task: ${taskText}
+
+Input material:
+[Paste the training notes, report, paragraph, or source content here.]
+
+Instructions:
+- Use only the information provided in the input material.
+- Do not invent facts, names, numbers, dates, examples, or scores.
+- If important information is missing, write "Not provided" or ask a short clarification question.
+- Keep the output clear, structured, and suitable for training use.
+
+Output format:
+1. Main output
+2. Key points
+3. Action items or next steps, if applicable
+4. Short review/checklist
+
+Why it works
+It gives the AI a role, a clear task, source material boundaries, anti-hallucination rules, and a fixed output format.`;
+    }
+
+    return null;
 };
 
 const getMissingToolMessage = (taskKey: string, toolMode: ToolMode, envName: string) => {
@@ -187,6 +384,8 @@ const runIntegratedAiTool = async ({
     modelName,
     messagesForAI,
     ollamaUrl,
+    translateTarget,
+    promptHistory,
 }: {
     taskKey: string;
     toolMode: ToolMode;
@@ -195,11 +394,47 @@ const runIntegratedAiTool = async ({
     modelName: string;
     messagesForAI: Array<{ role: string; content: string }>;
     ollamaUrl: string;
+    translateTarget?: string;
+    promptHistory?: Array<{ role: string; content: string }>;
 }): Promise<ToolResult> => {
     const envName = taskToolEnv[taskKey]?.[toolMode] || taskToolEnv.general[toolMode];
     const toolUrl = process.env[envName]?.trim();
 
-    if (toolMode === "offline" && (taskKey === "prompting" || taskKey === "general")) {
+    if (taskKey === "translation") {
+        const libreUrl = process.env.LIBRETRANSLATE_URL?.trim() || toolUrl;
+        if (!libreUrl) {
+            return {
+                handled: true,
+                reply: getMissingToolMessage(taskKey, "offline", "LIBRETRANSLATE_URL"),
+            };
+        }
+
+        return {
+            handled: true,
+            reply: await callLibreTranslateTool(libreUrl, message, translateTarget),
+        };
+    }
+
+    if (taskKey === "prompting") {
+        const directReply = getPromptingDirectReply(message);
+        if (directReply) {
+            return {
+                handled: true,
+                reply: directReply,
+            };
+        }
+
+        return {
+            handled: true,
+            reply: await callOllamaTool(
+                ollamaUrl,
+                modelName,
+                buildPromptingMessages(message, promptHistory || [], activity),
+            ),
+        };
+    }
+
+    if (toolMode === "offline" && taskKey === "general") {
         return {
             handled: true,
             reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
@@ -210,13 +445,6 @@ const runIntegratedAiTool = async ({
         return {
             handled: true,
             reply: getMissingToolMessage(taskKey, toolMode, envName),
-        };
-    }
-
-    if (taskKey === "translation" && envName === "LIBRETRANSLATE_URL") {
-        return {
-            handled: true,
-            reply: await callLibreTranslateTool(toolUrl, message),
         };
     }
 
@@ -234,7 +462,13 @@ const runIntegratedAiTool = async ({
         const canFallbackToOllama = (taskKey === "prompting" || taskKey === "general") && (ollamaUrl?.trim()?.length ?? 0) > 0;
         if (toolMode === "online" && canFallbackToOllama) {
             try {
-                const localReply = await callOllamaTool(ollamaUrl, modelName, messagesForAI);
+                const localReply = await callOllamaTool(
+                    ollamaUrl,
+                    modelName,
+                    taskKey === "prompting"
+                        ? buildPromptingMessages(message, promptHistory || [], activity)
+                        : messagesForAI,
+                );
                 return {
                     handled: true,
                     reply: `**Online tool unavailable — switched to offline model**\n\n${formatToolConfigHint(toolMode, taskKey, toolUrl)}\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\n---\n\n${localReply}`,
@@ -256,7 +490,7 @@ const runIntegratedAiTool = async ({
 
 export const askAI = async (req: any, res: Response): Promise<void> => {
     try {
-        const { message, chatId, modelId, activityId } = req.body;
+        const { message, chatId, modelId, activityId, translateTarget } = req.body;
         const userId = req.user.id;
         const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434";
 
@@ -350,6 +584,8 @@ ${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
                 modelName,
                 messagesForAI,
                 ollamaUrl,
+                translateTarget,
+                promptHistory: history.map(m => ({ role: m.role, content: m.content })),
             });
 
             if (taskToolResult.handled && taskToolResult.reply) {

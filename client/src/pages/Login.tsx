@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { clearError, setUser, setLoading, setError } from '../store/slices/authSlice.js';
 import { loginUser } from '../services/authService.js';
@@ -94,9 +94,6 @@ const Login: React.FC = () => {
             </button>
           </form>
 
-          <p style={{ textAlign: 'center', fontSize: '13px', marginTop: '24px', color: 'var(--steel)' }}>
-            New Personnel? <Link to="/signup" style={{ color: 'var(--gold)', fontWeight: 600 }}>Register Service Record</Link>
-          </p>
         </div>
       </div>
     </div>
