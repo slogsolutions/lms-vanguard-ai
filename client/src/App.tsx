@@ -2,7 +2,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'r
 import MainLayout from './components/MainLayout.js';
 import ProtectedRoute from './components/ProtectedRoute.js';
 import Login from './pages/Login.js';
-import SignUp from './pages/SignUp.js';
 import { useAuth } from './hooks/useAuth.js';
 import ChatInterface from './components/ChatInterface.js';
 import AdminPortal from './components/AdminPortal.js';
@@ -15,14 +14,14 @@ const Settings = () => <div className="section-card"><div className="card-header
 
 function AppRoutes() {
   const location = useLocation();
-  const isAuthPage = location.pathname === '/login' || location.pathname === '/signup';
+  const isAuthPage = location.pathname === '/login';
 
   useAuth(!isAuthPage);
 
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/signup" element={<SignUp />} />
+      <Route path="/signup" element={<Navigate to="/login" replace />} />
 
       <Route
         path="/"
