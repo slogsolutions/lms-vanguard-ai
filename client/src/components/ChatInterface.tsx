@@ -164,8 +164,13 @@ const scoreModelForTask = (model: Model, mode: TaskMode, activity?: Activity | n
   const keywordScore = mode.modelKeywords.reduce((score, keyword) => score + (text.includes(keyword) ? 3 : 0), 0);
   const taskType = activity?.type?.toLowerCase() ?? '';
   const typeScore = taskType.includes('online') && model.type === 'online' ? 4 : taskType === 'offline' && model.type === 'offline' ? 4 : model.type === 'offline' ? 1 : 0;
-  const statusScore = model.status === 'online' ? 2 : -4;
-  return keywordScore + typeScore + statusScore;
+  const status = (model.status ?? '').toLowerCase();
+  const statusScore = status.includes('down') || status.includes('inactive') || status.includes('error') ? -4 : 1;
+
+  // Prompting work benefits from low-latency local models; nudge selection toward offline.
+  const promptingBias = mode.key === 'prompting' && model.type === 'offline' ? 3 : 0;
+
+  return keywordScore + typeScore + statusScore + promptingBias;
 };
 
 const ChatInterface: React.FC = () => {
@@ -230,9 +235,15 @@ const ChatInterface: React.FC = () => {
         activityId,
       });
 
-      if (res.data.success) {
+      if (res.data?.success) {
         setMessages(m => [...m, { role: 'ai', text: res.data.reply }]);
         if (res.data.chatId) setChatId(res.data.chatId);
+      } else {
+        const errText =
+          res.data?.error
+          || res.data?.message
+          || 'AI request failed. Check backend logs and model configuration.';
+        setMessages(m => [...m, { role: 'ai', text: errText }]);
       }
 
       if (activityId) {
