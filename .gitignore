@@ -26,10 +26,10 @@ pnpm-debug.log*
 /server/src/generated/prisma
 
 # Local databases
-*.db
-*.db-journal
-*.sqlite
-*.sqlite3
+# *.db
+# *.db-journal
+# *.sqlite
+# *.sqlite3
 
 # OS / editor files
 .DS_Store
