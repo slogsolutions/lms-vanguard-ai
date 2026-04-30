@@ -9,6 +9,8 @@ import contentRouter from './routes/content.js';
 import chatRouter from './routes/chat.js';
 import profileRouter from './routes/profile.js';
 import aiModelRouter from './routes/aiModels.js';
+import uploadRouter from './routes/upload.js';
+import { checkChromaHealth } from './services/ragService.js';
 
 dotenv.config();
 
@@ -17,7 +19,7 @@ app.use(cors({
     origin: ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175"],
     credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
 app.use(cookieParser());
 
 // Routes
@@ -26,6 +28,7 @@ app.use("/api", contentRouter);
 app.use("/api", chatRouter);
 app.use("/api", profileRouter);
 app.use("/api", aiModelRouter);
+app.use("/api", uploadRouter);
 
 app.get("/", (req, res) => {
     res.send("Offline AI Learning Server is running");
@@ -39,6 +42,18 @@ async function checkConnection() {
         console.log('✅ Database connected successfully');
     } catch (err) {
         console.error('❌ Database connection error:', err);
+    }
+
+    // Check ChromaDB (non-blocking — RAG features degrade gracefully)
+    try {
+        const chromaOk = await checkChromaHealth();
+        if (chromaOk) {
+            console.log('✅ ChromaDB connected (RAG enabled)');
+        } else {
+            console.warn('⚠️  ChromaDB not available — document upload/RAG will not work. Start with: chroma run --host localhost --port 8000');
+        }
+    } catch {
+        console.warn('⚠️  ChromaDB not available — document upload/RAG will not work.');
     }
 }
 
