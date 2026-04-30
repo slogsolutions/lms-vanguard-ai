@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
 import dotenv from "dotenv";
+import { hasDocuments, queryDocuments, buildRAGPrompt } from "../services/ragService.js";
 
 dotenv.config();
 
@@ -386,6 +387,8 @@ const runIntegratedAiTool = async ({
     ollamaUrl,
     translateTarget,
     promptHistory,
+    userId,
+    chatId,
 }: {
     taskKey: string;
     toolMode: ToolMode;
@@ -396,6 +399,8 @@ const runIntegratedAiTool = async ({
     ollamaUrl: string;
     translateTarget?: string;
     promptHistory?: Array<{ role: string; content: string }>;
+    userId?: string;
+    chatId?: string;
 }): Promise<ToolResult> => {
     const envName = taskToolEnv[taskKey]?.[toolMode] || taskToolEnv.general[toolMode];
     const toolUrl = process.env[envName]?.trim();
@@ -434,7 +439,28 @@ const runIntegratedAiTool = async ({
         };
     }
 
-    if (toolMode === "offline" && taskKey === "general") {
+    if (toolMode === "offline" && (taskKey === "general" || taskKey === "summary")) {
+        // RAG-enhanced response when documents are uploaded
+        if (taskKey === "summary" && userId && chatId && hasDocuments(userId, chatId)) {
+            try {
+                const retrievedChunks = await queryDocuments(userId, chatId, message, 5);
+                if (retrievedChunks.length > 0) {
+                    const ragPrompt = buildRAGPrompt(message, retrievedChunks, activity?.title);
+                    const ragMessages = [
+                        { role: "system", content: messagesForAI[0]?.content || "" },
+                        ...messagesForAI.slice(1, -1), // chat history
+                        { role: "user", content: ragPrompt },
+                    ];
+                    return {
+                        handled: true,
+                        reply: await callOllamaTool(ollamaUrl, modelName, ragMessages),
+                    };
+                }
+            } catch (ragErr) {
+                console.error("RAG retrieval failed, falling back to direct:", ragErr);
+            }
+        }
+
         return {
             handled: true,
             reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
@@ -586,6 +612,8 @@ ${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
                 ollamaUrl,
                 translateTarget,
                 promptHistory: history.map(m => ({ role: m.role, content: m.content })),
+                userId,
+                chatId: activeChatId,
             });
 
             if (taskToolResult.handled && taskToolResult.reply) {

@@ -26,6 +26,12 @@ type Message = {
   text: string;
 };
 
+type UploadedDoc = {
+  fileName: string;
+  fileType: string;
+  chunkCount: number;
+};
+
 type TaskMode = {
   key: string;
   accent: string;
@@ -207,6 +213,10 @@ const ChatInterface: React.FC = () => {
   const [chatId, setChatId] = useState<string | null>(null);
   const [translateTarget, setTranslateTarget] = useState('hi');
   const [fileStatus, setFileStatus] = useState('');
+  const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [showFilePicker, setShowFilePicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const msgEndRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const activityId = new URLSearchParams(location.search).get('activity');
@@ -248,6 +258,45 @@ const ChatInterface: React.FC = () => {
   useEffect(() => {
     msgEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const handleDocumentUpload = async (file?: File | null) => {
+    if (!file) return;
+    setUploading(true);
+    setShowFilePicker(false);
+
+    const formData = new FormData();
+    formData.append('file', file);
+    if (chatId) formData.append('chatId', chatId);
+    if (activityId) formData.append('activityId', activityId);
+
+    try {
+      const res = await api.post('/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      if (res.data?.success) {
+        setUploadedDocs(prev => [...prev, {
+          fileName: res.data.data.fileName,
+          fileType: res.data.data.fileType,
+          chunkCount: res.data.data.chunkCount
+        }]);
+        if (!chatId && res.data.data.chatId) {
+          setChatId(res.data.data.chatId);
+        }
+        setMessages(m => [...m, { 
+          role: 'ai', 
+          text: `📄 Document uploaded: ${res.data.data.fileName} (${res.data.data.chunkCount} chunks indexed). You can now ask questions about this document.` 
+        }]);
+      } else {
+        setMessages(m => [...m, { role: 'ai', text: `Failed to upload document: ${res.data?.error || 'Unknown error'}` }]);
+      }
+    } catch (err: any) {
+      setMessages(m => [...m, { role: 'ai', text: `Upload error: ${err.response?.data?.error || err.message}` }]);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const sendMsg = async (overrideText?: string) => {
     const q = (overrideText ?? inputVal).trim();
@@ -418,6 +467,15 @@ const ChatInterface: React.FC = () => {
           <div>
             <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--navy)' }}>{mode.label}</div>
             <div style={{ fontSize: 11, color: 'var(--silver)' }}>{selectedModel.provider} - {selectedModel.desc}</div>
+            {uploadedDocs.length > 0 && mode.key === 'summary' && (
+              <div className="doc-pills">
+                {uploadedDocs.map((doc, i) => (
+                  <span key={i} className="doc-pill" title={`${doc.chunkCount} chunks`}>
+                    📄 {doc.fileName}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <span className={`badge ${selectedModel.type}`}>{selectedModel.type === 'offline' ? 'Offline' : 'Online'}</span>
         </div>
@@ -431,15 +489,42 @@ const ChatInterface: React.FC = () => {
           <div ref={msgEndRef} />
         </div>
         <div className="ai-input-area">
+          {mode.key === 'summary' && (
+            <div className="upload-wrapper">
+              <button 
+                className="upload-btn" 
+                onClick={() => setShowFilePicker(!showFilePicker)}
+                title="Upload Document"
+                disabled={uploading}
+              >
+                +
+              </button>
+              {showFilePicker && (
+                <div className="upload-popover">
+                  <div className="upload-option" onClick={() => { fileInputRef.current?.setAttribute('accept', '.pdf'); fileInputRef.current?.click(); }}>📄 PDF Document</div>
+                  <div className="upload-option" onClick={() => { fileInputRef.current?.setAttribute('accept', '.docx'); fileInputRef.current?.click(); }}>📝 Word Document</div>
+                  <div className="upload-option" onClick={() => { fileInputRef.current?.setAttribute('accept', '.xlsx,.csv,.xls'); fileInputRef.current?.click(); }}>📊 Excel / CSV</div>
+                </div>
+              )}
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                style={{ display: 'none' }} 
+                onChange={(e) => handleDocumentUpload(e.target.files?.[0])}
+              />
+            </div>
+          )}
           <textarea
             className="ai-textarea"
             rows={2}
-            placeholder={mode.placeholder}
+            placeholder={uploadedDocs.length > 0 ? "Ask any question about your uploaded documents..." : mode.placeholder}
             value={inputVal}
             onChange={e => setInputVal(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } }}
           />
-          <button className="send-btn" onClick={() => sendMsg()} disabled={loading}>{loading ? 'Working...' : 'Run Task'}</button>
+          <button className="send-btn" onClick={() => sendMsg()} disabled={loading || uploading}>
+            {(loading || uploading) ? 'Working...' : 'Run Task'}
+          </button>
         </div>
       </div>
     </div>
