@@ -58,9 +58,26 @@ function getEmbedder(): DefaultEmbeddingFunction {
 }
 
 function makeCollectionName(userId: string, chatId: string): string {
-    // ChromaDB collection names: 3-63 chars, alphanumeric + underscores/hyphens
-    const safe = `rag_${userId}_${chatId}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 63);
-    return safe.length < 3 ? safe.padEnd(3, "_") : safe;
+    // Chroma v2 collection name rules (per error message):
+    // - 3-512 characters
+    // - allowed chars: [a-zA-Z0-9._-]
+    // - must start and end with [a-zA-Z0-9]
+    const raw = `rag_${userId}_${chatId}`;
+    let safe = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    // Keep names short to avoid very long pending IDs
+    safe = safe.slice(0, 128);
+
+    // Ensure starts/ends with alphanumeric (trim separators introduced by truncation)
+    safe = safe.replace(/^[._-]+/, "");
+    safe = safe.replace(/[._-]+$/, "");
+
+    if (safe.length === 0) safe = "rag";
+    if (!/^[a-zA-Z0-9]/.test(safe)) safe = `c${safe}`;
+    if (!/[a-zA-Z0-9]$/.test(safe)) safe = `${safe}c`;
+
+    if (safe.length < 3) safe = safe.padEnd(3, "c");
+    return safe;
 }
 
 function makeStoreKey(userId: string, chatId: string): string {

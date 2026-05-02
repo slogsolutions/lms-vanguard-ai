@@ -23,18 +23,38 @@ export interface DocumentSection {
 
 // ── PDF Parser ──────────────────────────────────────────────
 async function parsePDF(buffer: Buffer): Promise<ParsedDocument> {
-    // pdf-parse is CJS, import dynamically
+    // pdf-parse v2 exports a PDFParse class (v1 exported a function).
     const pdfParseModule = (await import("pdf-parse")) as any;
-    const pdfParse = pdfParseModule.default || pdfParseModule;
-    const data = await pdfParse(buffer);
+    const PDFParseCtor =
+        (typeof pdfParseModule?.PDFParse === "function" && pdfParseModule.PDFParse)
+        || (typeof pdfParseModule?.default?.PDFParse === "function" && pdfParseModule.default.PDFParse)
+        || (typeof pdfParseModule?.default === "function" && pdfParseModule.default); // unlikely, but safe
 
-    const text = data.text?.trim() || "";
+    if (typeof PDFParseCtor !== "function") {
+        const keys = pdfParseModule && typeof pdfParseModule === "object" ? Object.keys(pdfParseModule) : [];
+        throw new Error(
+            `PDF parser load failed: could not find PDFParse constructor in pdf-parse. Keys: ${keys.join(", ") || "none"}`
+        );
+    }
+
+    const parser = new PDFParseCtor({ data: buffer });
+    let result: any;
+    try {
+        result = await parser.getText();
+    } finally {
+        // Always attempt to free memory
+        if (typeof parser.destroy === "function") {
+            await parser.destroy();
+        }
+    }
+
+    const text = result?.text?.trim() || "";
     const sections = splitTextIntoSections(text);
 
     return {
         text,
         metadata: {
-            pages: data.numpages,
+            pages: result?.total,
             wordCount: text.split(/\s+/).filter(Boolean).length,
             fileType: "pdf",
             hasTable: sections.some(s => s.type === "table"),

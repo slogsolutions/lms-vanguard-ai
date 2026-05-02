@@ -11,6 +11,7 @@ import profileRouter from './routes/profile.js';
 import aiModelRouter from './routes/aiModels.js';
 import uploadRouter from './routes/upload.js';
 import { checkChromaHealth } from './services/ragService.js';
+import { streamTTS } from './services/ttsService.js';
 
 dotenv.config();
 
@@ -22,6 +23,8 @@ app.use(cors({
 app.use(express.json({ limit: '15mb' }));
 app.use(cookieParser());
 
+import ttsRouter from './routes/tts.js';
+
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api", contentRouter);
@@ -29,7 +32,7 @@ app.use("/api", chatRouter);
 app.use("/api", profileRouter);
 app.use("/api", aiModelRouter);
 app.use("/api", uploadRouter);
-
+app.use("/api", ttsRouter);
 app.get("/", (req, res) => {
     res.send("Offline AI Learning Server is running");
 });
