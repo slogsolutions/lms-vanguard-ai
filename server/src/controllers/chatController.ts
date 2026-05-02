@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
 import dotenv from "dotenv";
-import { hasDocuments, queryDocuments, buildRAGPrompt } from "../services/ragService.js";
 
 dotenv.config();
 
@@ -387,8 +386,6 @@ const runIntegratedAiTool = async ({
     ollamaUrl,
     translateTarget,
     promptHistory,
-    userId,
-    chatId,
 }: {
     taskKey: string;
     toolMode: ToolMode;
@@ -399,8 +396,6 @@ const runIntegratedAiTool = async ({
     ollamaUrl: string;
     translateTarget?: string;
     promptHistory?: Array<{ role: string; content: string }>;
-    userId?: string;
-    chatId?: string;
 }): Promise<ToolResult> => {
     const envName = taskToolEnv[taskKey]?.[toolMode] || taskToolEnv.general[toolMode];
     const toolUrl = process.env[envName]?.trim();
@@ -439,8 +434,6 @@ const runIntegratedAiTool = async ({
         };
     }
 
-    // Formal communication should work like Prompting: always use local Ollama by default.
-    // Tool connector URLs are optional and not required for this task.
     if (taskKey === "communication") {
         return {
             handled: true,
@@ -448,28 +441,7 @@ const runIntegratedAiTool = async ({
         };
     }
 
-    if (toolMode === "offline" && (taskKey === "general" || taskKey === "summary" || taskKey === "communication" || taskKey === "voice" || taskKey === "quiz" || taskKey === "video" || taskKey === "conversion")) {
-        // RAG-enhanced response when documents are uploaded
-        if (taskKey === "summary" && userId && chatId && hasDocuments(userId, chatId)) {
-            try {
-                const retrievedChunks = await queryDocuments(userId, chatId, message, 5);
-                if (retrievedChunks.length > 0) {
-                    const ragPrompt = buildRAGPrompt(message, retrievedChunks, activity?.title);
-                    const ragMessages = [
-                        { role: "system", content: messagesForAI[0]?.content || "" },
-                        ...messagesForAI.slice(1, -1), // chat history
-                        { role: "user", content: ragPrompt },
-                    ];
-                    return {
-                        handled: true,
-                        reply: await callOllamaTool(ollamaUrl, modelName, ragMessages),
-                    };
-                }
-            } catch (ragErr) {
-                console.error("RAG retrieval failed, falling back to direct:", ragErr);
-            }
-        }
-
+    if (toolMode === "offline" && (taskKey === "general" || taskKey === "summary" || taskKey === "voice" || taskKey === "quiz" || taskKey === "video" || taskKey === "conversion")) {
         return {
             handled: true,
             reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
@@ -764,8 +736,6 @@ CRITICAL RULES:
         const toolMode = getToolMode(modelType);
 
         if (taskKey === "voice") {
-            // For voice tasks, the user wants a pure Text-to-Speech tool.
-            // Bypass the LLM entirely and just echo the text so it can be spoken.
             assistantReply = message;
         } else {
             try {
@@ -779,8 +749,6 @@ CRITICAL RULES:
                     ollamaUrl,
                     translateTarget,
                     promptHistory: history.map(m => ({ role: m.role, content: m.content })),
-                    userId,
-                    chatId: activeChatId,
                 });
 
                 if (taskToolResult.handled && taskToolResult.reply) {
