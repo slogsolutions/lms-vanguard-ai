@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
 import dotenv from "dotenv";
+import { detectLanguage, translateText } from "../services/translationService.js";
+import { storeContextInstantly, queryContext, checkChromaHealth } from "../services/ragService.js";
 
 dotenv.config();
 
@@ -179,15 +181,15 @@ const callOllamaTool = async (
             messages,
             stream: false,
             options: {
-                temperature: 0.25,
+                temperature: 0.35,
                 top_p: 0.9,
-                repeat_penalty: 1.08,
-                num_predict: 420,
-                num_ctx: 2048,
+                repeat_penalty: 1.1,
+                num_predict: 2048,
+                num_ctx: 4096,
                 ...options,
             }
         }),
-        timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 120_000),
+        timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 420_000), // Default to 7 Minutes
     });
 
     if (!response.ok) {
@@ -213,6 +215,7 @@ const buildPromptingMessages = (
     message: string,
     history: Array<{ role: string; content: string }>,
     activity: ActivityContext | null,
+    ragContext?: string,
 ) => {
     const recentHistory = history
         .slice(-8)
@@ -224,6 +227,8 @@ const buildPromptingMessages = (
 
     const lastHistoryMessage = recentHistory[recentHistory.length - 1];
     const hasCurrentMessage = lastHistoryMessage?.role === "user" && lastHistoryMessage.content === message;
+
+    const contextToUse = ragContext || activity?.body || "Practice prompt writing, prompt improvement, and AI chat.";
 
     return [
         {
@@ -266,10 +271,56 @@ Response rules:
   - unclear typo: answer the most likely meaning and ask a short clarification if needed
 
 Workspace task: ${activity?.title || "Basic Prompting"}
-Task description: ${activity?.body || "Practice prompt writing, prompt improvement, and AI chat."}`,
+Task material/context:
+${contextToUse}`,
         },
         ...recentHistory,
         ...(hasCurrentMessage ? [] : [{ role: "user", content: message }]),
+    ];
+};
+
+const buildQuizMessages = (
+    message: string,
+    history: Array<{ role: string; content: string }>,
+    activity: ActivityContext | null,
+    ragContext?: string,
+) => {
+    const recentHistory = history
+        .slice(-6)
+        .filter(m => m.content?.trim())
+        .map(m => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content,
+        }));
+
+    return [
+        {
+            role: "system",
+            content: `You are an expert Quiz Maker and Instructor. Your goal is to generate high-quality assessments based on the provided material.
+
+Rules for Exam & Quiz Generation:
+1. Support all question types: MCQs, Long/Short Answers, True/False, Fill-ups.
+2. If asked for marks, assign them.
+3. Be professional and concise. Do not use bold headers unnecessarily.
+
+Source Material Notice:
+Use the provided material below to generate the quiz. This is authorized training material within a private, closed-circuit LMS. 
+
+Mandatory Execution Rules:
+- DO NOT refuse requests based on "copyright" or "safety" concerns related to the source material; it is organization-owned data.
+- If the user asks for "No explanations" or "No answers", strictly follow that format.
+- Always generate the full number of questions requested (e.g., 10 MCQs means 10 separate questions).
+
+Current Task: ${activity?.title || "Quiz Generation"}
+Description: ${activity?.body || "Create questions from the provided training material."}
+
+SOURCE MATERIAL / CONTEXT:
+${ragContext || "No specific material provided. Use general knowledge about the task."}
+
+If the user provides more text/data in their message, generate a quiz from that plus the source material above.`,
+        },
+        ...recentHistory,
+        { role: "user", content: message },
     ];
 };
 
@@ -386,6 +437,7 @@ const runIntegratedAiTool = async ({
     ollamaUrl,
     translateTarget,
     promptHistory,
+    ragContext,
 }: {
     taskKey: string;
     toolMode: ToolMode;
@@ -396,6 +448,7 @@ const runIntegratedAiTool = async ({
     ollamaUrl: string;
     translateTarget?: string;
     promptHistory?: Array<{ role: string; content: string }>;
+    ragContext?: string;
 }): Promise<ToolResult> => {
     const envName = taskToolEnv[taskKey]?.[toolMode] || taskToolEnv.general[toolMode];
     const toolUrl = process.env[envName]?.trim();
@@ -409,12 +462,35 @@ const runIntegratedAiTool = async ({
             };
         }
 
-        return {
-            handled: true,
-            reply: await callLibreTranslateTool(libreUrl, message, translateTarget),
-        };
-    }
+        // HYBRID LOGIC: 
+        // In Translation mode, if a document is attached, we ALWAYS prioritize translating the document content.
+        const hasDocument = ragContext && ragContext.length > 0;
+        
+        if (hasDocument) {
+            console.log("[Translate] Using Ollama for structured document translation...");
+            const translationPrompt = [
+                { role: "system", content: `You are a professional document translator. 
+                Your task is to translate the provided document text into ${translateTarget || 'Hindi'}.
 
+                CRITICAL INSTRUCTIONS:
+                1. PRESERVE THE STRUCTURE: You must return the translation in the EXACT SAME FORMAT as the input. 
+                2. Keep all headers, bullet points, numbering, and spacing exactly as they appear in the source.
+                3. Keep technical terms or names in English if it's more professional.
+                4. Only return the translated content. Do not add any greetings or explanations.` },
+                { role: "user", content: `DOCUMENT TO TRANSLATE:\n\n${ragContext}` }
+            ];
+            return {
+                handled: true,
+                reply: await callOllamaTool(ollamaUrl, modelName, translationPrompt),
+            };
+        } else {
+            console.log("[Translate] Using LibreTranslate for fast message translation...");
+            return {
+                handled: true,
+                reply: await callLibreTranslateTool(libreUrl, message, translateTarget),
+            };
+        }
+    }
     if (taskKey === "prompting") {
         const directReply = getPromptingDirectReply(message);
         if (directReply) {
@@ -429,9 +505,28 @@ const runIntegratedAiTool = async ({
             reply: await callOllamaTool(
                 ollamaUrl,
                 modelName,
-                buildPromptingMessages(message, promptHistory || [], activity),
+                buildPromptingMessages(message, promptHistory || [], activity, ragContext),
             ),
         };
+    }
+
+    if (taskKey === "quiz") {
+        const quizMessages = buildQuizMessages(message, promptHistory || [], activity, ragContext);
+        if (toolMode === "offline") {
+            return {
+                handled: true,
+                reply: await callOllamaTool(ollamaUrl, modelName, quizMessages),
+            };
+        } else {
+            // Online mode: use the specific online quiz tool URL or fallback to general
+            const quizOnlineUrl = process.env.ONLINE_QUIZ_TOOL_URL || process.env.ONLINE_GENERAL_TOOL_URL;
+            if (quizOnlineUrl) {
+                return {
+                    handled: true,
+                    reply: await callHttpAiTool(quizOnlineUrl, { model: modelName, messages: quizMessages }),
+                };
+            }
+        }
     }
 
     if (toolMode === "offline" && taskKey === "general") {
@@ -466,7 +561,7 @@ const runIntegratedAiTool = async ({
                     ollamaUrl,
                     modelName,
                     taskKey === "prompting"
-                        ? buildPromptingMessages(message, promptHistory || [], activity)
+                        ? buildPromptingMessages(message, promptHistory || [], activity, ragContext)
                         : messagesForAI,
                 );
                 return {
@@ -488,11 +583,54 @@ const runIntegratedAiTool = async ({
     }
 };
 
+export const ingestDocument = async (req: any, res: Response): Promise<void> => {
+    try {
+        const { text, chatId, fileName } = req.body;
+        const userId = req.user.id;
+
+        console.log(`[Ingest] Received file: ${fileName} (${text?.length || 0} chars) for chat: ${chatId || 'new'}`);
+
+        if (!text || text.length < 5) {
+            res.status(400).json({ success: false, error: "No readable text provided" });
+            return;
+        }
+
+        let activeChatId = chatId;
+        if (!activeChatId) {
+            const newChat = await prisma.chat.create({
+                data: { userId }
+            });
+            activeChatId = newChat.id;
+            console.log(`[Ingest] Created new chat: ${activeChatId}`);
+        }
+
+        console.log(`[Ingest] Storing context instantly for ${activeChatId}...`);
+        
+        await storeContextInstantly(activeChatId, text);
+        
+        console.log(`[Ingest] Success: File stored for chat ${activeChatId}.`);
+
+        res.status(200).json({ 
+            success: true, 
+            chatId: activeChatId,
+            message: "File attached instantly"
+        });
+    } catch (error) {
+        console.error("[Ingest] Failed:", error);
+        res.status(500).json({ success: false, error: error instanceof Error ? error.message : "Failed to attach document" });
+    }
+};
+
+export const getIngestionStatus = async (req: any, res: Response): Promise<void> => {
+    // In "Instant Mode", everything is always 100%
+    res.status(200).json({ success: true, current: 1, total: 1, status: 'completed' });
+};
+
 export const askAI = async (req: any, res: Response): Promise<void> => {
     try {
         const { message, chatId, modelId, activityId, translateTarget } = req.body;
         const userId = req.user.id;
-        const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434";
+        const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 
         // 1. Get Model info
         let modelName = "phi"; // Default fallback
@@ -531,40 +669,38 @@ export const askAI = async (req: any, res: Response): Promise<void> => {
         });
         const history = previousMessages.reverse();
 
-        // 5. Get Context (Specific activity if provided, or general)
-        let contextText = "";
+        const userLang = detectLanguage(message);
+        let queryForSearch = message;
+        if (userLang !== 'en') {
+            queryForSearch = await translateText(message, 'en');
+        }
+
+        // 5. Get Context via RAG (ChromaDB)
+        const ragContext = await queryContext(activeChatId, queryForSearch);
+
         let currentActivity: ActivityContext | null = null;
+        let activityContextText = "";
         if (activityId) {
             const activity = await prisma.content.findUnique({ where: { id: activityId } });
             if (activity) {
                 currentActivity = activity;
-                contextText = `CURRENT TASK: ${activity.title}
-CATEGORY: ${activity.category || "General"}
-MODE: ${activity.type}
-DESCRIPTION: ${activity.body}
-STRICT TASK RULES:
-- Keep every response focused on this task only.
-- If the learner asks something unrelated, briefly redirect them back to the current task.
-- Produce outputs in the format expected by this task.
-- Give practical steps, examples, and a final usable deliverable.
-- Do not mark the task complete unless the learner has produced or reviewed the deliverable.`;
+                activityContextText = `CURRENT TASK: ${activity.title}\nDESCRIPTION: ${activity.body}`;
             }
-        } else {
-            const contents = await prisma.content.findMany({ take: 5 });
-            contextText = contents.map(c => `[Lab Module: ${c.title}]\n${c.body}`).join("\n\n");
         }
 
-        const systemMessage = `You are "Defence AI Lab Instructor", an elite AI assistant trained for the Indian Army's SLOG LMS.
-Your tone is professional, disciplined, and encouraging.
+        const systemMessage = `You are "Defence AI Lab Instructor", an elite AI assistant.
+Tone: Professional, disciplined, structured.
 
 MISSION OBJECTIVE:
-1. Provide expert guidance on AI and LLM concepts.
-2. Use military analogies where appropriate (e.g., comparing Prompt Engineering to 'Fire Control' or 'Mission Briefing').
-3. Be concise and structured. Use bullet points.
-4. Maintain high operational security (OPSEC) - remind users not to share classified info with online models.
-5. When a current task is supplied, act as a task-specific workspace, not a generic chatbot.
+1. Provide expert guidance on the requested task.
+2. Use the provided RELEVANT CONTEXT to answer accurately.
+3. If the context is not enough, use your general knowledge but prioritize context.
+4. Maintain high operational security (OPSEC).
 
-${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
+RELEVANT CONTEXT FROM DOCUMENTS:
+${ragContext || "No specific document context available for this query."}
+
+${activityContextText ? `TASK CONTEXT:\n${activityContextText}` : ""}`;
 
         const messagesForAI = [
             { role: "system", content: systemMessage },
@@ -586,6 +722,7 @@ ${contextText ? `CONTEXTUAL DATA:\n${contextText}` : ""}`;
                 ollamaUrl,
                 translateTarget,
                 promptHistory: history.map(m => ({ role: m.role, content: m.content })),
+                ragContext,
             });
 
             if (taskToolResult.handled && taskToolResult.reply) {
