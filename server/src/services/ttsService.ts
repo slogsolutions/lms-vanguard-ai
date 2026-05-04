@@ -13,15 +13,7 @@ export function streamTTS(text: string): Promise<Readable> {
   return new Promise((resolve, reject) => {
     const piperDir = path.join(__dirname, '../../../piper');
     const piperExe = path.join(piperDir, 'piper.exe');
-    
-    // Check for Hindi characters (Unicode range \u0900-\u097F)
-    const hasHindi = /[\u0900-\u097F]/.test(text);
-    const modelFileName = hasHindi ? 'hi_IN-rohan-medium.onnx' : 'en_US-lessac-medium.onnx';
-    const modelPath = path.join(piperDir, modelFileName);
-
-    if (!fs.existsSync(modelPath)) {
-      return reject(new Error(`Model file not found: ${modelFileName}`));
-    }
+    const modelPath = path.join(piperDir, 'en_US-lessac-medium.onnx');
 
     // Create a temporary file path for the audio output
     // This avoids Windows stdout corruption (\n -> \r\n) which destroys binary WAV data
