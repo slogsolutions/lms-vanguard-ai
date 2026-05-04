@@ -24,6 +24,7 @@ pnpm-debug.log*
 # Prisma generated output
 /src/generated/prisma
 /server/src/generated/prisma
+server/storage/contexts/
 
 # Local databases
 *.db
