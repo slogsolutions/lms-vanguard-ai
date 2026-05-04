@@ -36,3 +36,6 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Piper TTS binaries and model files
+piper/
