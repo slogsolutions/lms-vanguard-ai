@@ -32,6 +32,7 @@ type FormalCommLanguage = 'English' | 'Hindi';
 type TaskMode = {
   key: string;
   accent: string;
+
   glow: string;
   icon: string;
   label: string;
@@ -208,16 +209,16 @@ const VoicePlayer = ({ text }: { text: string }) => {
   const extractCleanText = (raw: string) => {
     // 1. Strip out the backend fallback warning message if present
     let text = raw.replace(/\*\*Online tool unavailable.*?\n\n---\n\n/s, '');
-    
+
     // 2. Strip out remaining markdown bold/italic fluff
     text = text.replace(/\*\*/g, '').replace(/__/g, '').trim();
-    
+
     // 3. If the response contains a code block, use only the content of the code block
     const codeMatch = text.match(/```(?:[^`]+)```/);
     if (codeMatch) {
       return codeMatch[0].replace(/```\w*/g, '').trim();
     }
-    
+
     return text.trim();
   };
 
@@ -250,7 +251,7 @@ const VoicePlayer = ({ text }: { text: string }) => {
       }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
-      
+
       const audio = new Audio(url);
       audioRef.current = audio;
       audio.onended = () => setIsPlaying(false);
@@ -266,8 +267,8 @@ const VoicePlayer = ({ text }: { text: string }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--white)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', maxWidth: '400px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-        <button 
-          onClick={handlePlay} 
+        <button
+          onClick={handlePlay}
           disabled={loading || !cleanText}
           style={{
             width: '44px', height: '44px', borderRadius: '50%', background: 'var(--task-accent)', color: '#fff',
@@ -352,9 +353,11 @@ const ChatInterface: React.FC = () => {
         setActivity(activityData);
         setSelectedModel(bestModel);
         setChatId(null);
-        setMessages([{ role: 'ai', text: activityData
-          ? `${activeMode.starter}\n\nCurrent task: ${activityData.title}\nModel selected: ${bestModel?.name ?? 'No model available'}\n\nUse the quick actions or send your task material to begin.`
-          : `Welcome to the Defence AI Lab. Select an activity first, or ask a general AI learning question.` }]);
+        setMessages([{
+          role: 'ai', text: activityData
+            ? `${activeMode.starter}\n\nCurrent task: ${activityData.title}\nModel selected: ${bestModel?.name ?? 'No model available'}\n\nUse the quick actions or send your task material to begin.`
+            : `Welcome to the Defence AI Lab. Select an activity first, or ask a general AI learning question.`
+        }]);
       } catch (err) {
         console.error('Workspace init error:', err);
         setMessages([{ role: 'ai', text: 'Workspace could not load task/model data. Please refresh once the server is running.' }]);
