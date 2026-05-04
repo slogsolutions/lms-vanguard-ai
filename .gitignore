@@ -40,3 +40,5 @@ Thumbs.db
 
 # Piper TTS binaries and model files
 piper/
+server/prisma/dev.db
+server/chroma/
