@@ -64,6 +64,21 @@ The system is therefore useful as a controlled AI training and productivity plat
 
 The main objective of the project is to create a simple and reliable AI-enabled web platform for Army personnel.
 
+---
+
+## 4. Technical Roadmap & AI Strategy
+
+The system is designed with a **Hybrid-Offline** architecture to ensure 100% security and mission continuity. 
+
+### Key Technical Pillars:
+- **Offline LLMs**: Mistral 7B, Llama 3, and Phi-3 via Ollama ($0 API cost).
+- **Secure IDE**: Monaco Editor integration for offline coding and debugging.
+- **Multimedia Generation**: Local Stable Video Diffusion and Coqui TTS for secure voice/video synthesis.
+- **Enterprise Security**: All training data is processed on local servers using PostgreSQL.
+
+> [!NOTE]
+> For a detailed breakdown of models, libraries, and pricing, refer to the [LMS_VANGUARD_AI_ROADMAP.md](file:///c:/Users/krada/Desktop/LMS-SLOG/LMS_VANGUARD_AI_ROADMAP.md) file.
+
 ### Main Objectives
 
 - To provide AI assistance through a clear web interface.
