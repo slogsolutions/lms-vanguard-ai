@@ -41,6 +41,8 @@ type WorkspaceFile = {
   ext: string;
   text?: string;
 };
+type FormalCommType = 'Email' | 'Letter' | 'Message' | 'Notice' | 'Application' | 'Report';
+type FormalCommLanguage = 'English' | 'Hindi';
 
 type TaskMode = {
   key: string;
@@ -224,6 +226,111 @@ const scoreModelForTask = (model: Model, mode: TaskMode, activity?: Activity | n
   return keywordScore + typeScore + statusScore + promptingBias;
 };
 
+const VoicePlayer = ({ text }: { text: string }) => {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const extractCleanText = (raw: string) => {
+    // 1. Strip out the backend fallback warning message if present
+    let text = raw.replace(/\*\*Online tool unavailable.*?\n\n---\n\n/s, '');
+    
+    // 2. Strip out remaining markdown bold/italic fluff
+    text = text.replace(/\*\*/g, '').replace(/__/g, '').trim();
+    
+    // 3. If the response contains a code block, use only the content of the code block
+    const codeMatch = text.match(/```(?:[^`]+)```/);
+    if (codeMatch) {
+      return codeMatch[0].replace(/```\w*/g, '').trim();
+    }
+    
+    return text.trim();
+  };
+
+  const cleanText = extractCleanText(text);
+
+  const handlePlay = async () => {
+    if (isPlaying && audioRef.current) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+      return;
+    }
+
+    if (audioRef.current) {
+      audioRef.current.play();
+      setIsPlaying(true);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const ttsUrl = `${(api.defaults.baseURL || 'http://localhost:5000/api').replace(/\/$/, '')}/tts`;
+      const response = await fetch(ttsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: cleanText }),
+      });
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(errBody || `TTS failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => setIsPlaying(false);
+      audio.play();
+      setIsPlaying(true);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--white)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', maxWidth: '400px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <button 
+          onClick={handlePlay} 
+          disabled={loading || !cleanText}
+          style={{
+            width: '44px', height: '44px', borderRadius: '50%', background: 'var(--task-accent)', color: '#fff',
+            border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            fontSize: '18px', flexShrink: 0, transition: 'transform 0.1s'
+          }}
+          onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
+          onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+          onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+        >
+          {loading ? '⏳' : isPlaying ? '⏸' : '▶'}
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--navy)', marginBottom: '4px' }}>AI Generated Voice</div>
+          <div style={{ height: '6px', background: 'var(--mist)', borderRadius: '3px', overflow: 'hidden', position: 'relative' }}>
+            {isPlaying && (
+              <div style={{
+                position: 'absolute', top: 0, left: 0, height: '100%', width: '100%',
+                background: 'var(--task-accent)', opacity: 0.4,
+                animation: 'pulse 1s infinite alternate'
+              }} />
+            )}
+            <div style={{ width: isPlaying ? '100%' : '0%', height: '100%', background: 'var(--task-accent)', transition: isPlaying ? 'width 10s linear' : 'width 0.2s' }} />
+          </div>
+        </div>
+      </div>
+      <details style={{ fontSize: '12px', color: 'var(--steel)' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>View Transcript</summary>
+        <div style={{ marginTop: '10px', padding: '10px', background: 'var(--mist)', borderRadius: '6px', whiteSpace: 'pre-wrap', lineHeight: 1.5, color: 'var(--navy)' }}>
+          {cleanText}
+        </div>
+      </details>
+      <style>{`@keyframes pulse { from { opacity: 0.4; } to { opacity: 0.8; } }`}</style>
+    </div>
+  );
+};
+
 const ChatInterface: React.FC = () => {
   const [models, setModels] = useState<Model[]>([]);
   const [selectedModel, setSelectedModel] = useState<Model | null>(null);
@@ -241,6 +348,17 @@ const ChatInterface: React.FC = () => {
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [commType, setCommType] = useState<FormalCommType>('Email');
+  const [commLang, setCommLang] = useState<FormalCommLanguage>('English');
+  const [commTo, setCommTo] = useState('');
+  const [commSubject, setCommSubject] = useState('');
+  const [commSalutation, setCommSalutation] = useState('');
+  const [commBody, setCommBody] = useState('');
+  const [commClosing, setCommClosing] = useState('');
+  const [commSender, setCommSender] = useState('');
+  const [commDate, setCommDate] = useState('');
+  const [commLocation, setCommLocation] = useState('');
+
   const msgEndRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const activityId = new URLSearchParams(location.search).get('activity');
@@ -336,6 +454,37 @@ const ChatInterface: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const buildFormalCommPrompt = () => {
+    const lines: string[] = [];
+    lines.push('Context: This is for legitimate official/administrative communication. Do not fabricate facts. Only refuse if the user explicitly asks for deception/forgery/impersonation.');
+    lines.push(`Language: ${commLang}`);
+    lines.push(`Type: ${commType}`);
+    if (commType !== 'Message') lines.push(`To/Authority/Receiver: ${commTo || 'Name Not Provided'}`);
+    lines.push(`Subject/Title: ${commSubject || 'Generate from purpose/details'}`);
+    lines.push(`Salutation: ${commSalutation || (commLang === 'Hindi' ? 'महोदय/महोदया,' : 'Sir/Madam,')}`);
+    lines.push(`Body/Purpose:\n${commBody || inputVal || ''}`.trim());
+    lines.push(`Closing: ${commClosing || (commLang === 'Hindi' ? 'भवदीय,' : 'Yours faithfully,')}`);
+    lines.push(`Sender Name: ${commSender || 'Name Not Provided'}`);
+    if (commType === 'Notice' || commType === 'Report') lines.push(`Date: ${commDate || 'Date Not Provided'}`);
+    if (commType === 'Report') lines.push(`Location: ${commLocation || 'Location Not Provided'}`);
+
+    return lines.join('\n');
+  };
+
+  const exportCommunicationText = (text: string) => {
+    const content = (text || '').trim();
+    if (!content) return;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `formal-communication-${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   const switchModel = (m: Model) => {
@@ -875,6 +1024,116 @@ const ChatInterface: React.FC = () => {
           </div>
         )}
 
+        {mode.key === 'communication' && (
+          <div className="translation-panel" style={{ marginTop: 12 }}>
+            <div className="translation-control">
+              <label htmlFor="comm-language">Language</label>
+              <select id="comm-language" value={commLang} onChange={e => setCommLang(e.target.value as FormalCommLanguage)}>
+                <option value="English">English</option>
+                <option value="Hindi">Hindi</option>
+              </select>
+            </div>
+            <div className="translation-control">
+              <label htmlFor="comm-type">Type</label>
+              <select id="comm-type" value={commType} onChange={e => setCommType(e.target.value as FormalCommType)}>
+                <option value="Email">Email</option>
+                <option value="Letter">Letter</option>
+                <option value="Message">Message</option>
+                <option value="Notice">Notice</option>
+                <option value="Application">Application</option>
+                <option value="Report">Report</option>
+              </select>
+            </div>
+            {commType !== 'Message' && (
+              <div className="translation-control file-control">
+                <label htmlFor="comm-to">To / Authority / Receiver</label>
+                <input
+                  id="comm-to"
+                  value={commTo}
+                  onChange={e => setCommTo(e.target.value)}
+                  placeholder={commLang === 'Hindi' ? 'उदा: कमांडिंग ऑफिसर, यूनिट ...' : 'e.g., Commanding Officer, Unit ...'}
+                />
+              </div>
+            )}
+            <div className="translation-control file-control">
+              <label htmlFor="comm-subject">Subject / Title</label>
+              <input
+                id="comm-subject"
+                value={commSubject}
+                onChange={e => setCommSubject(e.target.value)}
+                placeholder={commLang === 'Hindi' ? 'विषय लिखें' : 'Enter subject'}
+              />
+            </div>
+            <div className="translation-control file-control">
+              <label htmlFor="comm-salutation">Salutation</label>
+              <input
+                id="comm-salutation"
+                value={commSalutation}
+                onChange={e => setCommSalutation(e.target.value)}
+                placeholder={commLang === 'Hindi' ? 'महोदय/महोदया,' : 'Sir/Madam,'}
+              />
+            </div>
+            <div className="translation-control file-control" style={{ flex: '1 1 100%' }}>
+              <label htmlFor="comm-body">Body / Purpose</label>
+              <textarea
+                id="comm-body"
+                value={commBody}
+                onChange={e => setCommBody(e.target.value)}
+                placeholder={commLang === 'Hindi' ? 'मुख्य विवरण लिखें...' : 'Write the main details...'}
+                rows={4}
+              />
+            </div>
+            <div className="translation-control file-control">
+              <label htmlFor="comm-closing">Closing</label>
+              <input
+                id="comm-closing"
+                value={commClosing}
+                onChange={e => setCommClosing(e.target.value)}
+                placeholder={commLang === 'Hindi' ? 'भवदीय,' : 'Yours faithfully,'}
+              />
+            </div>
+            <div className="translation-control file-control">
+              <label htmlFor="comm-sender">Sender Name</label>
+              <input
+                id="comm-sender"
+                value={commSender}
+                onChange={e => setCommSender(e.target.value)}
+                placeholder={commLang === 'Hindi' ? 'अपना नाम' : 'Your name'}
+              />
+            </div>
+            {(commType === 'Notice' || commType === 'Report') && (
+              <div className="translation-control file-control">
+                <label htmlFor="comm-date">Date</label>
+                <input id="comm-date" value={commDate} onChange={e => setCommDate(e.target.value)} placeholder="YYYY-MM-DD" />
+              </div>
+            )}
+            {commType === 'Report' && (
+              <div className="translation-control file-control">
+                <label htmlFor="comm-location">Location</label>
+                <input id="comm-location" value={commLocation} onChange={e => setCommLocation(e.target.value)} placeholder={commLang === 'Hindi' ? 'स्थान' : 'Location'} />
+              </div>
+            )}
+
+            <div className="translation-control" style={{ alignSelf: 'flex-end', gap: 8, display: 'flex' }}>
+              <button
+                type="button"
+                onClick={() => sendMsg(buildFormalCommPrompt())}
+                disabled={loading}
+              >
+                Generate
+              </button>
+              <button
+                type="button"
+                onClick={() => exportCommunicationText(messages.slice().reverse().find(m => m.role === 'ai')?.text || '')}
+                disabled={messages.filter(m => m.role === 'ai').length === 0}
+              >
+                Export
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mode.key === 'voice' && false /* Disabled top panel for voice, moved to bottom */}
 
         <div className="ai-chat-hdr">
           <div>
@@ -887,7 +1146,13 @@ const ChatInterface: React.FC = () => {
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.role}`}>
               <div className={`msg-avatar ${m.role}`}>{m.role === 'ai' ? mode.icon : 'U'}</div>
-              <div className="msg-bubble" style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+              <div className="msg-bubble" style={{ whiteSpace: 'pre-wrap', background: mode.key === 'voice' && m.role === 'ai' ? 'transparent' : undefined, padding: mode.key === 'voice' && m.role === 'ai' ? 0 : undefined, border: mode.key === 'voice' && m.role === 'ai' ? 'none' : undefined }}>
+                {mode.key === 'voice' && m.role === 'ai' && i > 0 ? (
+                  <VoicePlayer text={m.text} />
+                ) : (
+                  m.text
+                )}
+              </div>
             </div>
           ))}
           <div ref={msgEndRef} />

@@ -530,13 +530,41 @@ const runIntegratedAiTool = async ({
     }
 
     if (toolMode === "offline" && taskKey === "general") {
+    if (taskKey === "communication") {
         return {
             handled: true,
             reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
         };
     }
 
+    if (toolMode === "offline" && (taskKey === "general" || taskKey === "summary" || taskKey === "voice" || taskKey === "quiz" || taskKey === "video" || taskKey === "conversion")) {
+        return {
+            handled: true,
+            reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
+        };
+    }
+
+    const canFallbackToOllama = (taskKey === "prompting" || taskKey === "general" || taskKey === "voice" || taskKey === "summary" || taskKey === "communication" || taskKey === "quiz" || taskKey === "video" || taskKey === "conversion") && (ollamaUrl?.trim()?.length ?? 0) > 0;
+
     if (!toolUrl) {
+        if (toolMode === "online" && canFallbackToOllama) {
+            try {
+                const localReply = await callOllamaTool(
+                    ollamaUrl,
+                    modelName,
+                    taskKey === "prompting"
+                        ? buildPromptingMessages(message, promptHistory || [], activity)
+                        : messagesForAI,
+                );
+                return {
+                    handled: true,
+                    reply: `**Online tool unavailable — switched to offline model**\n\nThe dedicated connector for \`${taskKey}\` is not configured, falling back to local model.\n\n---\n\n${localReply}`,
+                };
+            } catch (fallbackErr) {
+                // Fallback failed, let it show the missing tool message
+            }
+        }
+
         return {
             handled: true,
             reply: getMissingToolMessage(taskKey, toolMode, envName),
@@ -554,7 +582,6 @@ const runIntegratedAiTool = async ({
         return { handled: true, reply };
     } catch (err) {
         // If an online tool is misconfigured (common: 405), fall back to local Ollama for prompt/general tasks.
-        const canFallbackToOllama = (taskKey === "prompting" || taskKey === "general") && (ollamaUrl?.trim()?.length ?? 0) > 0;
         if (toolMode === "online" && canFallbackToOllama) {
             try {
                 const localReply = await callOllamaTool(
@@ -583,48 +610,121 @@ const runIntegratedAiTool = async ({
     }
 };
 
-export const ingestDocument = async (req: any, res: Response): Promise<void> => {
-    try {
-        const { text, chatId, fileName } = req.body;
-        const userId = req.user.id;
+const formalCommunicationSystemRules = `You are a formal communication assistant designed for structured, official writing for legitimate administrative/training use.
 
-        console.log(`[Ingest] Received file: ${fileName} (${text?.length || 0} chars) for chat: ${chatId || 'new'}`);
+Your task is to generate clear, respectful, and properly formatted formal content.
 
-        if (!text || text.length < 5) {
-            res.status(400).json({ success: false, error: "No readable text provided" });
-            return;
-        }
+Rules:
+1. Support two languages only: Hindi and English.
+2. Use the language specified in the input. Do NOT mix languages.
+3. Maintain a formal and respectful tone at all times.
+4. Do NOT add unnecessary creativity or informal phrases.
+5. Follow the exact structure based on the selected type.
+6. Keep sentences clear, concise, and professional.
+7. Do NOT fabricate facts (names, dates, unit details, reference numbers). Use only what the user provides.
+8. Only refuse if the user explicitly requests deception/forgery/impersonation or misleading content. Otherwise, comply normally.
 
-        let activeChatId = chatId;
-        if (!activeChatId) {
-            const newChat = await prisma.chat.create({
-                data: { userId }
-            });
-            activeChatId = newChat.id;
-            console.log(`[Ingest] Created new chat: ${activeChatId}`);
-        }
+Supported Types:
+- Email
+- Letter
+- Message
+- Notice
+- Application
+- Report
 
-        console.log(`[Ingest] Storing context instantly for ${activeChatId}...`);
-        
-        await storeContextInstantly(activeChatId, text);
-        
-        console.log(`[Ingest] Success: File stored for chat ${activeChatId}.`);
+Formatting Rules:
 
-        res.status(200).json({ 
-            success: true, 
-            chatId: activeChatId,
-            message: "File attached instantly"
-        });
-    } catch (error) {
-        console.error("[Ingest] Failed:", error);
-        res.status(500).json({ success: false, error: error instanceof Error ? error.message : "Failed to attach document" });
-    }
-};
+[Email]
+To: <receiver>
+Subject: <subject>
 
-export const getIngestionStatus = async (req: any, res: Response): Promise<void> => {
-    // In "Instant Mode", everything is always 100%
-    res.status(200).json({ success: true, current: 1, total: 1, status: 'completed' });
-};
+<Salutation>
+
+<Body>
+
+<Closing>
+<Sender Name>
+
+---
+
+[Letter]
+To,
+<Receiver Details>
+
+Subject: <subject>
+
+<Salutation>
+
+<Body>
+
+<Closing>
+<Sender Name>
+
+---
+
+[Message]
+<Short formal message content>
+- <Sender Name>
+
+---
+
+[Notice]
+NOTICE
+
+<Title>
+Date: <date>
+
+<Content>
+
+<Authority Name>
+
+---
+
+[Application]
+To,
+<Authority>
+
+Subject: <subject>
+
+<Salutation>
+
+I respectfully wish to state that <purpose>.
+<Details>
+
+Kindly consider my request.
+
+<Closing>
+<Sender Name>
+
+---
+
+[Report]
+REPORT
+
+Date: <date>
+Location: <location>
+
+Subject: <subject>
+
+<Description of incident or details>
+
+<Conclusion>
+
+<Sender Name>
+
+---
+
+Tone Guidelines:
+- English: Use phrases like "I respectfully request", "Kindly consider", "I wish to inform".
+- Hindi: Use phrases like "सविनय निवेदन है", "कृपया विचार करें", "मैं यह सूचित करना चाहता हूँ".
+
+Output:
+- Only return the final formatted content.
+- Do NOT include explanations.
+
+Refusal rule (only when necessary):
+- If the user explicitly asks to deceive/mislead/forge/impersonate, respond with exactly:
+I cannot assist with generating content that may be used to deceive or mislead others. Is there anything else I can help you with?`;
 
 export const askAI = async (req: any, res: Response): Promise<void> => {
     try {
@@ -702,13 +802,31 @@ ${ragContext || "No specific document context available for this query."}
 
 ${activityContextText ? `TASK CONTEXT:\n${activityContextText}` : ""}`;
 
+        const taskKey = getTaskKey(currentActivity);
+
+        let finalSystemMessage = systemMessage;
+
+        if (taskKey === "voice") {
+            finalSystemMessage = `You are a strict Text-to-Speech (TTS) Script Generator.
+Your ONLY purpose is to generate the EXACT text to be spoken by a TTS audio engine.
+
+CRITICAL RULES:
+1. NEVER introduce yourself, your role, or mention the LMS.
+2. NEVER add conversational filler like "Here is the script:", "Sure!", or "As an AI...".
+3. DO NOT provide instructions or explain what you are doing.
+4. If the user inputs a simple word or phrase (e.g. "hello world"), simply output that exact phrase so the engine can speak it.
+5. If the user asks you to write a story, speech, or script, output ONLY the spoken words.
+6. The output must be pure text, ready to be read aloud immediately.`;
+        } else if (taskKey === "communication") {
+            finalSystemMessage += `\n\nFORMAL COMMUNICATION TASK RULES:\n${formalCommunicationSystemRules}\n`;
+        }
+
         const messagesForAI = [
-            { role: "system", content: systemMessage },
+            { role: "system", content: finalSystemMessage },
             ...history.map(m => ({ role: m.role, content: m.content }))
         ];
 
         let assistantReply = "";
-        const taskKey = getTaskKey(currentActivity);
         const toolMode = getToolMode(modelType);
 
         try {
@@ -725,12 +843,13 @@ ${activityContextText ? `TASK CONTEXT:\n${activityContextText}` : ""}`;
                 ragContext,
             });
 
-            if (taskToolResult.handled && taskToolResult.reply) {
-                assistantReply = taskToolResult.reply;
+                if (taskToolResult.handled && taskToolResult.reply) {
+                    assistantReply = taskToolResult.reply;
+                }
+            } catch (err) {
+                console.error("AI tool failed:", err);
+                assistantReply = `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nNo local fallback was used.`;
             }
-        } catch (err) {
-            console.error("AI tool failed:", err);
-            assistantReply = `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nNo local fallback was used.`;
         }
 
         if (!assistantReply.trim()) {
@@ -746,10 +865,10 @@ ${activityContextText ? `TASK CONTEXT:\n${activityContextText}` : ""}`;
             }
         });
 
-        res.status(200).json({ 
-            success: true, 
+        res.status(200).json({
+            success: true,
             reply: assistantReply,
-            chatId: activeChatId 
+            chatId: activeChatId
         });
 
     } catch (error) {

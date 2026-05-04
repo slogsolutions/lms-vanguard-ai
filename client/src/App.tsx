@@ -8,9 +8,9 @@ import AdminPortal from './components/AdminPortal.js';
 import SoldierPortal from './components/SoldierPortal.js';
 import Profile from './pages/Profile.js';
 import Dashboard from './pages/Dashboard.js';
+import PageSettings from './pages/Settings.js';
 
 const Reports = () => <div className="section-card"><div className="card-header"><div className="card-title">Reports & Analysis</div></div><div className="card-body">Coming soon...</div></div>;
-const Settings = () => <div className="section-card"><div className="card-header"><div className="card-title">Lab Configuration</div></div><div className="card-body">Coming soon...</div></div>;
 
 function AppRoutes() {
   const location = useLocation();
@@ -37,7 +37,7 @@ function AppRoutes() {
         <Route path="chat" element={<ChatInterface />} />
         <Route path="profile" element={<Profile />} />
         <Route path="reports" element={<Reports />} />
-        <Route path="settings" element={<Settings />} />
+        <Route path="settings" element={<PageSettings />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />

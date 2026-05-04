@@ -9,6 +9,7 @@ import contentRouter from './routes/content.js';
 import chatRouter from './routes/chat.js';
 import profileRouter from './routes/profile.js';
 import aiModelRouter from './routes/aiModels.js';
+import ttsRouter from './routes/tts.js';
 
 dotenv.config();
 
@@ -26,7 +27,7 @@ app.use("/api", contentRouter);
 app.use("/api", chatRouter);
 app.use("/api", profileRouter);
 app.use("/api", aiModelRouter);
-
+app.use("/api", ttsRouter);
 app.get("/", (req, res) => {
     res.send("Offline AI Learning Server is running");
 });
