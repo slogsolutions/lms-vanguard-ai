@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import api from '../api/axios';
 
 export const TTSPlayer: React.FC = () => {
   const [text, setText] = useState('');
@@ -11,7 +12,8 @@ export const TTSPlayer: React.FC = () => {
     
     try {
       // 1. Fetch the streamed audio from the backend
-      const response = await fetch('http://localhost:5000/api/tts', {
+      const ttsUrl = `${(api.defaults.baseURL || 'http://localhost:5000/api').replace(/\/$/, '')}/tts`;
+      const response = await fetch(ttsUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -20,7 +22,7 @@ export const TTSPlayer: React.FC = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Network response was not ok');
+        throw new Error(await response.text() || 'Network response was not ok');
       }
 
       // 2. Convert the response stream to a Blob

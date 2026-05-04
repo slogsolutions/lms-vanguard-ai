@@ -206,19 +206,19 @@ const VoicePlayer = ({ text }: { text: string }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const extractCleanText = (raw: string) => {
-    // 1. Strip out the backend fallback warning message
+    // 1. Strip out the backend fallback warning message if present
     let text = raw.replace(/\*\*Online tool unavailable.*?\n\n---\n\n/s, '');
     
-    // 2. Strip out remaining markdown fluff
-    text = text.replace(/\*\*[^*]+\*\*/g, '').trim();
+    // 2. Strip out remaining markdown bold/italic fluff
+    text = text.replace(/\*\*/g, '').replace(/__/g, '').trim();
     
-    // 3. If there are quotes or code blocks, prefer extracting just those
-    const match = text.match(/```(?:[^`]+)```/) || text.match(/"([^"]+)"/);
-    if (match) {
-      return match[0].replace(/```\w*/g, '').replace(/"/g, '').trim();
+    // 3. If the response contains a code block, use only the content of the code block
+    const codeMatch = text.match(/```(?:[^`]+)```/);
+    if (codeMatch) {
+      return codeMatch[0].replace(/```\w*/g, '').trim();
     }
     
-    return text;
+    return text.trim();
   };
 
   const cleanText = extractCleanText(text);
@@ -238,12 +238,16 @@ const VoicePlayer = ({ text }: { text: string }) => {
 
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:5000/api/tts', {
+      const ttsUrl = `${(api.defaults.baseURL || 'http://localhost:5000/api').replace(/\/$/, '')}/tts`;
+      const response = await fetch(ttsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: cleanText })
+        body: JSON.stringify({ text: cleanText }),
       });
-      if (!response.ok) throw new Error('TTS failed');
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(errBody || `TTS failed (${response.status})`);
+      }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       

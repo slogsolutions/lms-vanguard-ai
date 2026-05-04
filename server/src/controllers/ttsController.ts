@@ -1,6 +1,14 @@
 import { Request, Response } from 'express';
 import { streamTTS } from '../services/ttsService.js';
 
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 export const synthesizeTTS = async (req: Request, res: Response) => {
   const { text } = req.body;
 
@@ -10,24 +18,11 @@ export const synthesizeTTS = async (req: Request, res: Response) => {
 
   try {
     const audioStream = await streamTTS(text);
+    const buf = await streamToBuffer(audioStream);
 
-    // Set the appropriate headers for audio streaming
     res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    // Pipe the audio stream directly to the response
-    audioStream.pipe(res);
-
-    audioStream.on('error', (err) => {
-      console.error('Error in TTS stream:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to generate audio.' });
-      } else {
-        res.end();
-      }
-    });
-
-    // We don't need to manually end the response; pipe handles it when the stream ends.
+    res.setHeader('Content-Length', String(buf.length));
+    res.end(buf);
   } catch (error) {
     console.error('Error generating TTS:', error);
     if (!res.headersSent) {
