@@ -9,6 +9,7 @@ import SoldierPortal from './components/SoldierPortal.js';
 import Profile from './pages/Profile.js';
 import Dashboard from './pages/Dashboard.js';
 import PageSettings from './pages/Settings.js';
+import LearningModules from './pages/LearningModules.js';
 
 const Reports = () => <div className="section-card"><div className="card-header"><div className="card-title">Reports & Analysis</div></div><div className="card-body">Coming soon...</div></div>;
 
@@ -34,6 +35,8 @@ function AppRoutes() {
         <Route index element={<Dashboard />} />
         <Route path="admin" element={<AdminPortal />} />
         <Route path="courses" element={<SoldierPortal />} />
+        <Route path="modules" element={<LearningModules />} />
+        <Route path="modules/:topicId" element={<LearningModules />} />
         <Route path="chat" element={<ChatInterface />} />
         <Route path="profile" element={<Profile />} />
         <Route path="reports" element={<Reports />} />

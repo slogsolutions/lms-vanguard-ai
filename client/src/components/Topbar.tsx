@@ -9,12 +9,15 @@ const Topbar: React.FC = () => {
     "/admin": { title: "Candidate Registry", sub: "Register & manage lab candidates" },
     "/chat": { title: "AI Workspace", sub: "Interactive AI model sessions" },
     "/courses": { title: "Lab Activities", sub: "Practical assessment tasks" },
+    "/modules": { title: "Learning Modules", sub: "Lessons, examples, and code practice" },
     "/reports": { title: "Reports & Analysis", sub: "Performance analytics & export" },
     "/settings": { title: "Lab Configuration", sub: "System configuration" },
     "/profile": { title: "User Profile", sub: "Personal service record" }
   };
 
-  const current = pageLabels[location.pathname] || { title: "Defence AI Lab", sub: "LMS • Classified" };
+  const current = location.pathname.startsWith('/modules')
+    ? pageLabels["/modules"]
+    : pageLabels[location.pathname] || { title: "Defence AI Lab", sub: "LMS - Classified" };
 
   return (
     <header className="topbar">

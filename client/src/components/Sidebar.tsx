@@ -4,6 +4,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '../store/store.js';
 import { logout as logoutAction } from '../store/slices/authSlice.js';
 import api from '../api/axios.js';
+import { learningModules } from '../data/learningModules.js';
 
 const Sidebar: React.FC = () => {
   const { user } = useSelector((state: RootState) => state.auth);
@@ -25,6 +26,13 @@ const Sidebar: React.FC = () => {
     { section: "AI Lab" },
     { id: "workspace", label: "AI Workspace", icon: "🤖", path: "/chat" },
     { id: "activities", label: "Activity List", icon: "📋", path: "/courses" },
+    { section: "Modules" },
+    ...learningModules.map(module => ({
+      id: `module-${module.id}`,
+      label: module.shortTitle,
+      icon: "ED",
+      path: `/modules/${module.id}`,
+    })),
     { section: "Analytics" },
     { id: "reports", label: "Reports & Analysis", icon: "📊", path: "/reports" },
     { section: "Admin" },

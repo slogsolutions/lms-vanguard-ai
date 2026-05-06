@@ -12,7 +12,7 @@ export const TTSPlayer: React.FC = () => {
     
     try {
       // 1. Fetch the streamed audio from the backend
-      const ttsUrl = `${(api.defaults.baseURL || 'http://localhost:5000/api').replace(/\/$/, '')}/tts`;
+      const ttsUrl = `${(api.defaults.baseURL || 'http://localhost:5005/api').replace(/\/$/, '')}/tts`;
       const response = await fetch(ttsUrl, {
         method: 'POST',
         headers: {

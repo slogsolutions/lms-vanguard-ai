@@ -4,7 +4,7 @@ import mammoth from 'mammoth';
 
 // Use a local worker path for offline support
 // Vite will automatically bundle this correctly
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.js?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 export const extractTextFromExcel = async (file: File): Promise<string> => {

@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
 import dotenv from "dotenv";
 import { detectLanguage, translateText } from "../services/translationService.js";
-import { storeContextInstantly, queryContext, checkChromaHealth } from "../services/ragService.js";
+import { storeContextInstantly, queryContext, checkChromaHealth, ingestToChroma, ingestionProgress } from "../services/ragService.js";
 
 dotenv.config();
 
@@ -324,6 +324,58 @@ If the user provides more text/data in their message, generate a quiz from that 
     ];
 };
 
+const buildSummaryMessages = (
+    message: string,
+    history: Array<{ role: string; content: string }>,
+    activity: ActivityContext | null,
+    ragContext?: string,
+) => {
+    const recentHistory = history
+        .slice(-6)
+        .filter(m => m.content?.trim())
+        .map(m => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content,
+        }));
+
+    return [
+        {
+            role: "system",
+            content: `You are a Document Analysis Expert inside a training LMS. The user has uploaded document(s) and their extracted content is included in the conversation.
+
+CORE RULES:
+1. Answer ANY question about the uploaded document(s) accurately and completely using ONLY the data present in the document.
+2. If the user writes in Hindi or Hinglish, respond naturally in the same language.
+3. When the data is numerical or tabular and the user asks for a chart, graph, visualization, or any visual representation, you MUST output the chart data in this EXACT format on a new line:
+
+\`\`\`chart
+{"type":"pie","title":"Chart Title","labels":["Label1","Label2","Label3"],"data":[10,20,30]}
+\`\`\`
+
+Supported chart types: pie, doughnut, bar, line, polarArea
+Always include a text explanation alongside the chart data block.
+You can output multiple chart blocks in one response if the user asks for multiple visualizations.
+
+4. For tabular data, format as clean readable tables using aligned columns.
+5. Use bullet points and numbered lists for summaries and key findings.
+6. Be thorough but concise. Focus on accuracy from the document content.
+7. Do NOT hallucinate or invent data that is not present in the documents.
+8. If the document does not contain information to answer a question, say so clearly.
+9. For Excel/CSV data: identify columns, rows, totals, averages, patterns, and trends. Perform calculations when asked.
+10. For PDF/Word data: identify key sections, headings, important points, and action items.
+11. When asked to summarize, provide: Key Points, Important Facts, Action Items (if any), and a Short Final Summary.
+12. Support follow-up questions - the user may ask multiple questions about the same document.
+
+Current Task: ${activity?.title || "Document Analysis & Summarization"}
+Description: ${activity?.body || "Analyze uploaded documents and answer questions interactively."}
+
+${ragContext ? `ADDITIONAL INDEXED CONTEXT:\n${ragContext}` : ""}`
+        },
+        ...recentHistory,
+        { role: "user", content: message },
+    ];
+};
+
 const getPromptingDirectReply = (message: string) => {
     const text = message.trim().toLowerCase();
     const normalized = text.replace(/[^a-z0-9\u0900-\u097f\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -529,11 +581,22 @@ const runIntegratedAiTool = async ({
         }
     }
 
-    if (toolMode === "offline" && taskKey === "general") {
     if (taskKey === "communication") {
         return {
             handled: true,
             reply: await callOllamaTool(ollamaUrl, modelName, messagesForAI),
+        };
+    }
+
+    if (taskKey === "summary") {
+        const summaryMessages = buildSummaryMessages(message, promptHistory || [], activity, ragContext);
+        return {
+            handled: true,
+            reply: await callOllamaTool(ollamaUrl, modelName, summaryMessages, {
+                num_ctx: 8192,
+                num_predict: 4096,
+                temperature: 0.3,
+            }),
         };
     }
 
@@ -843,13 +906,12 @@ CRITICAL RULES:
                 ragContext,
             });
 
-                if (taskToolResult.handled && taskToolResult.reply) {
-                    assistantReply = taskToolResult.reply;
-                }
-            } catch (err) {
-                console.error("AI tool failed:", err);
-                assistantReply = `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nNo local fallback was used.`;
+            if (taskToolResult.handled && taskToolResult.reply) {
+                assistantReply = taskToolResult.reply;
             }
+        } catch (err) {
+            console.error("AI tool failed:", err);
+            assistantReply = `**AI Tool Error**\n\nThe configured ${toolMode} tool for \`${taskKey}\` failed.\n\n${err instanceof Error ? err.message : "Unknown tool error"}\n\nNo local fallback was used.`;
         }
 
         if (!assistantReply.trim()) {
@@ -874,6 +936,69 @@ CRITICAL RULES:
     } catch (error) {
         console.error("Error in askAI:", error);
         res.status(500).json({ success: false, error: "AI interaction failed" });
+    }
+};
+
+export const ingestDocument = async (req: any, res: Response): Promise<void> => {
+    try {
+        const { text, chatId, fileName } = req.body;
+        const userId = req.user.id;
+
+        if (typeof text !== "string" || !text.trim()) {
+            res.status(400).json({ success: false, error: "Document text is required" });
+            return;
+        }
+
+        let activeChatId = chatId;
+        if (activeChatId) {
+            const existingChat = await prisma.chat.findFirst({
+                where: { id: activeChatId, userId },
+            });
+
+            if (!existingChat) {
+                res.status(404).json({ success: false, error: "Chat not found" });
+                return;
+            }
+        } else {
+            const newChat = await prisma.chat.create({
+                data: { userId },
+            });
+            activeChatId = newChat.id;
+        }
+
+        await ingestToChroma(activeChatId, text.trim());
+
+        res.status(200).json({
+            success: true,
+            chatId: activeChatId,
+            fileName,
+            status: ingestionProgress[activeChatId]?.status || "stored",
+        });
+    } catch (error) {
+        console.error("Error ingesting document:", error);
+        res.status(500).json({ success: false, error: "Document ingestion failed" });
+    }
+};
+
+export const getIngestionStatus = async (req: any, res: Response): Promise<void> => {
+    try {
+        const { chatId } = req.params;
+        const chat = await prisma.chat.findFirst({
+            where: { id: chatId, userId: req.user.id },
+        });
+
+        if (!chat) {
+            res.status(404).json({ success: false, error: "Chat not found" });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: ingestionProgress[chatId] || { total: 1, current: 1, status: "stored" },
+        });
+    } catch (error) {
+        console.error("Error fetching ingestion status:", error);
+        res.status(500).json({ success: false, error: "Failed to fetch ingestion status" });
     }
 };
 

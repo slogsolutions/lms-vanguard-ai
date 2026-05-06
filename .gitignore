@@ -27,12 +27,12 @@ pnpm-debug.log*
 server/storage/contexts/
 
 # Local databases
-# *.db
-# *.db-journal
-# *.sqlite
-# *.sqlite3
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 
-# OS / editor files
+OS / editor files
 .DS_Store
 Thumbs.db
 .vscode/
@@ -40,5 +40,3 @@ Thumbs.db
 
 # Piper TTS binaries and model files
 piper/
-server/prisma/dev.db
-server/chroma/

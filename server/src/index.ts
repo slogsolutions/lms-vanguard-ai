@@ -11,7 +11,13 @@ import profileRouter from './routes/profile.js';
 import aiModelRouter from './routes/aiModels.js';
 import ttsRouter from './routes/tts.js';
 
-dotenv.config();
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(process.cwd(), '.env') });
 
 const app = express();
 app.use(cors({
@@ -32,19 +38,8 @@ app.get("/", (req, res) => {
     res.send("Offline AI Learning Server is running");
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5005;
 
-async function checkConnection() {
-    try {
-        await prisma.$connect();
-        console.log('✅ Database connected successfully');
-    } catch (err) {
-        console.error('❌ Database connection error:', err);
-    }
-}
-
-checkConnection().then(() => {
-    app.listen(PORT, () => {
-        console.log(`🚀 Server listening on port ${PORT}`);
-    });
+app.listen(PORT, () => {
+    console.log(`🚀 Server listening on port ${PORT}`);
 });

@@ -14,7 +14,7 @@ if (!fs.existsSync(CONTEXT_DIR)) {
 
 // Keep Chroma for when we want smart retrieval, but focus on file storage for now
 const chroma = new ChromaClient({
-    path: process.env.CHROMA_URL || "http://localhost:8000"
+    host: process.env.CHROMA_URL || "http://localhost:8000"
 });
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
